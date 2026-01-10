@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE) release
+
+override_dh_auto_install:
+	install -D -m 755 audyn $(CURDIR)/debian/audyn/usr/bin/audyn
+	install -D -m 644 packaging/audyn.service $(CURDIR)/debian/audyn/lib/systemd/system/audyn.service
+
+override_dh_auto_clean:
+	$(MAKE) clean || true

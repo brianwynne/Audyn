@@ -20,3 +20,15 @@ audyn
 
 # MS Office temp files
 ~$*
+
+# Debian build artifacts
+debian/.debhelper/
+debian/audyn/
+debian/files
+debian/*.debhelper
+debian/*.substvars
+debian/debhelper-build-stamp
+*.deb
+*.dsc
+*.changes
+*.buildinfo

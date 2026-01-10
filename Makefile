@@ -1,5 +1,5 @@
 # Audyn - AES67 Audio Capture & Archival Engine
-# Makefile for Ubuntu 24.04+
+# Makefile for Ubuntu 22.04+, Debian 12+
 #
 # Copyright: (c) 2026 B. Wynne
 # Author: B. Wynne

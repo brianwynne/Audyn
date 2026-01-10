@@ -1,0 +1,12 @@
+audyn (1.0.0-1) stable; urgency=medium
+
+  * Initial release
+  * AES67 RTP receiver with PTP/TAI timestamping
+  * PipeWire fallback input
+  * WAV and Opus/Ogg output sinks
+  * Rotter-compatible archive rotation and naming
+  * Lock-free frame pool and audio queue
+  * Jitter buffer with PTP clock sync
+  * systemd service with security hardening
+
+ -- B. Wynne <brianwynne.ireland@gmail.com>  Fri, 10 Jan 2026 12:00:00 +0000

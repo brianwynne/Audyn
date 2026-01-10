@@ -1,0 +1,29 @@
+Source: audyn
+Section: sound
+Priority: optional
+Maintainer: B. Wynne <brianwynne.ireland@gmail.com>
+Build-Depends: debhelper-compat (= 12),
+               pkg-config,
+               libpipewire-0.3-dev,
+               libopus-dev,
+               libogg-dev
+Standards-Version: 4.6.0
+Homepage: https://github.com/brianwynne/Audyn
+Rules-Requires-Root: no
+
+Package: audyn
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: pipewire
+Description: AES67 audio capture and archival engine
+ Audyn is a professional-grade audio capture system for AES67/PTP
+ networked audio streams with PipeWire fallback support.
+ .
+ Features:
+  - AES67 RTP receiver with PTP/TAI timestamping
+  - PipeWire fallback input for local audio capture
+  - WAV and Opus/Ogg output formats
+  - Rotter-compatible archive rotation and file naming
+  - Lock-free frame pool and audio queue
+  - Jitter buffer with PTP clock synchronization
+  - systemd service integration
