@@ -1,0 +1,89 @@
+/* Audyn Web - Global Styles */
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Recording indicator animation */
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.recording-pulse {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* Card hover effects */
+.v-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.v-card:hover {
+  transform: translateY(-2px);
+}
+
+/* Audio meter gradient background */
+.meter-gradient {
+  background: linear-gradient(
+    to right,
+    #4caf50 0%,
+    #8bc34a 40%,
+    #ffeb3b 60%,
+    #ff9800 80%,
+    #f44336 100%
+  );
+}
+
+/* Monospace text for technical values */
+.mono {
+  font-family: 'Roboto Mono', monospace;
+}
+
+/* Utility classes */
+.gap-1 { gap: 4px; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+
+/* Make tables more readable */
+.v-data-table {
+  font-size: 14px;
+}
+
+/* Audio player styling */
+audio {
+  width: 100%;
+  border-radius: 8px;
+}
+
+audio::-webkit-media-controls-panel {
+  background-color: rgba(0, 0, 0, 0.3);
+}

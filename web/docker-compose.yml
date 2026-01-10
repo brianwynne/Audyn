@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: audyn-backend
+    restart: unless-stopped
+    environment:
+      - AUDYN_DEV_MODE=false
+      - AUDYN_BIN=/usr/bin/audyn
+      - AUDYN_ARCHIVE_ROOT=/var/lib/audyn
+      - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
+      - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
+      - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
+      - ENTRA_REDIRECT_URI=${ENTRA_REDIRECT_URI:-http://localhost/auth/callback}
+    volumes:
+      - /var/lib/audyn:/var/lib/audyn:rw
+      - /usr/bin/audyn:/usr/bin/audyn:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - audyn-network
+    # For AES67 multicast, may need host network
+    # network_mode: host
+
+  # Frontend (production build served by nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: audyn-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+    networks:
+      - audyn-network
+
+networks:
+  audyn-network:
+    driver: bridge
