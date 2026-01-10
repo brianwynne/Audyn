@@ -1,19 +1,22 @@
 """
 Real-time Audio Levels WebSocket
 
-Provides real-time audio level meters via WebSocket.
+Provides real-time audio level meters for all recorders via WebSocket.
 
 Copyright: (c) 2026 B. Wynne
 License: GPLv2 or later
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Optional
 import asyncio
 import json
 import logging
 import random
 import math
+
+from ..api.recorders import get_all_recorders, update_recorder_levels
+from ..models import ChannelLevel, RecorderState
 
 logger = logging.getLogger(__name__)
 
@@ -70,62 +73,79 @@ class ConnectionManager:
             self.disconnect(conn)
 
     async def _broadcast_levels(self):
-        """Continuously broadcast audio levels."""
-        # Simulated levels for demo (replace with actual Audyn integration)
-        phase_l = 0
-        phase_r = 0.3
+        """Continuously broadcast audio levels for all recorders."""
+        # Phase offsets for each recorder to simulate different audio sources
+        phases = {i: random.random() * 6.28 for i in range(1, 7)}
 
         while self._running:
             try:
-                # TODO: Get actual levels from Audyn process
-                # For now, simulate realistic audio levels
+                recorders = get_all_recorders()
+                recorder_levels = []
 
-                # Simulate varying audio levels (in dB)
-                base_level = -18  # Average level around -18 dB
-                variation = 12  # ±12 dB variation
+                for recorder in recorders:
+                    if recorder.state == RecorderState.RECORDING:
+                        # Simulate realistic varying audio levels
+                        phase_l = phases.get(recorder.id, 0)
+                        phase_r = phase_l + 0.3
 
-                # Create smooth, natural-looking level changes
-                phase_l += 0.15
-                phase_r += 0.12
+                        phases[recorder.id] = phase_l + 0.12
 
-                level_l_db = base_level + (math.sin(phase_l) * variation * 0.5) + \
-                             (random.random() - 0.5) * 6
-                level_r_db = base_level + (math.sin(phase_r) * variation * 0.5) + \
-                             (random.random() - 0.5) * 6
+                        base_level = -18
+                        variation = 12
 
-                # Clamp to realistic range
-                level_l_db = max(-60, min(0, level_l_db))
-                level_r_db = max(-60, min(0, level_r_db))
+                        level_l_db = base_level + (math.sin(phase_l) * variation * 0.5) + \
+                                     (random.random() - 0.5) * 6
+                        level_r_db = base_level + (math.sin(phase_r) * variation * 0.5) + \
+                                     (random.random() - 0.5) * 6
 
-                # Peak detection (occasional peaks)
-                if random.random() > 0.95:
-                    level_l_db = min(0, level_l_db + 10)
-                if random.random() > 0.95:
-                    level_r_db = min(0, level_r_db + 10)
+                        # Clamp to realistic range
+                        level_l_db = max(-60, min(0, level_l_db))
+                        level_r_db = max(-60, min(0, level_r_db))
 
-                # Convert to linear (0-1) for meter display
-                level_l_linear = 10 ** (level_l_db / 20)
-                level_r_linear = 10 ** (level_r_db / 20)
+                        # Occasional peaks
+                        if random.random() > 0.95:
+                            level_l_db = min(0, level_l_db + 10)
+                        if random.random() > 0.95:
+                            level_r_db = min(0, level_r_db + 10)
+
+                        levels = [
+                            ChannelLevel(
+                                name="L",
+                                level_db=round(level_l_db, 1),
+                                level_linear=round(10 ** (level_l_db / 20), 3),
+                                peak_db=round(level_l_db + 3, 1),
+                                clipping=level_l_db > -1
+                            ),
+                            ChannelLevel(
+                                name="R",
+                                level_db=round(level_r_db, 1),
+                                level_linear=round(10 ** (level_r_db / 20), 3),
+                                peak_db=round(level_r_db + 3, 1),
+                                clipping=level_r_db > -1
+                            )
+                        ]
+                    else:
+                        # Silence when not recording
+                        levels = [
+                            ChannelLevel(name="L", level_db=-60, level_linear=0, peak_db=-60, clipping=False),
+                            ChannelLevel(name="R", level_db=-60, level_linear=0, peak_db=-60, clipping=False)
+                        ]
+
+                    # Update recorder's levels
+                    update_recorder_levels(recorder.id, levels)
+
+                    recorder_levels.append({
+                        "recorder_id": recorder.id,
+                        "recorder_name": recorder.name,
+                        "studio_id": recorder.studio_id,
+                        "state": recorder.state.value,
+                        "channels": [l.model_dump() for l in levels]
+                    })
 
                 await self.broadcast({
-                    "type": "levels",
+                    "type": "all_levels",
                     "timestamp": asyncio.get_event_loop().time(),
-                    "channels": [
-                        {
-                            "name": "L",
-                            "level_db": round(level_l_db, 1),
-                            "level_linear": round(level_l_linear, 3),
-                            "peak_db": round(level_l_db + 3, 1),
-                            "clipping": level_l_db > -1
-                        },
-                        {
-                            "name": "R",
-                            "level_db": round(level_r_db, 1),
-                            "level_linear": round(level_r_linear, 3),
-                            "peak_db": round(level_r_db + 3, 1),
-                            "clipping": level_r_db > -1
-                        }
-                    ]
+                    "recorders": recorder_levels
                 })
 
                 # Update at ~30 fps
@@ -142,17 +162,26 @@ manager = ConnectionManager()
 
 
 @router.websocket("/levels")
-async def websocket_levels(websocket: WebSocket):
+async def websocket_all_levels(websocket: WebSocket):
     """
-    WebSocket endpoint for real-time audio levels.
+    WebSocket endpoint for real-time audio levels of all recorders.
 
-    Sends JSON messages with audio level data:
+    Sends JSON messages with audio level data for all recorders:
     {
-        "type": "levels",
+        "type": "all_levels",
         "timestamp": 1234567890.123,
-        "channels": [
-            {"name": "L", "level_db": -18.5, "level_linear": 0.119, "peak_db": -15.0, "clipping": false},
-            {"name": "R", "level_db": -17.2, "level_linear": 0.138, "peak_db": -14.0, "clipping": false}
+        "recorders": [
+            {
+                "recorder_id": 1,
+                "recorder_name": "Recorder 1",
+                "studio_id": "studio-a",
+                "state": "recording",
+                "channels": [
+                    {"name": "L", "level_db": -18.5, "level_linear": 0.119, "peak_db": -15.0, "clipping": false},
+                    {"name": "R", "level_db": -17.2, "level_linear": 0.138, "peak_db": -14.0, "clipping": false}
+                ]
+            },
+            ...
         ]
     }
     """
@@ -160,15 +189,12 @@ async def websocket_levels(websocket: WebSocket):
 
     try:
         while True:
-            # Keep connection alive, handle any client messages
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-                # Handle client commands if needed
                 message = json.loads(data)
                 if message.get("type") == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
             except asyncio.TimeoutError:
-                # Send keepalive
                 await websocket.send_text(json.dumps({"type": "keepalive"}))
 
     except WebSocketDisconnect:
@@ -176,3 +202,31 @@ async def websocket_levels(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+
+
+@router.websocket("/levels/{recorder_id}")
+async def websocket_recorder_levels(websocket: WebSocket, recorder_id: int):
+    """
+    WebSocket endpoint for a single recorder's audio levels.
+    """
+    await websocket.accept()
+
+    try:
+        while True:
+            recorders = get_all_recorders()
+            recorder = next((r for r in recorders if r.id == recorder_id), None)
+
+            if recorder:
+                await websocket.send_text(json.dumps({
+                    "type": "levels",
+                    "recorder_id": recorder_id,
+                    "state": recorder.state.value,
+                    "channels": [l.model_dump() for l in recorder.levels]
+                }))
+
+            await asyncio.sleep(1 / 30)
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")

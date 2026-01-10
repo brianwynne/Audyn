@@ -8,15 +8,39 @@ import { useAuthStore } from '@/stores/auth'
 const routes = [
   {
     path: '/',
+    name: 'overview',
+    component: () => import('@/views/Overview.vue'),
+    meta: { requiresAuth: true, title: 'Overview' }
+  },
+  {
+    path: '/dashboard',
     name: 'dashboard',
     component: () => import('@/views/Dashboard.vue'),
     meta: { requiresAuth: true, title: 'Dashboard' }
   },
   {
+    path: '/recorders',
+    name: 'recorders',
+    component: () => import('@/views/Recorders.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Recorders' }
+  },
+  {
+    path: '/recorders/:id',
+    name: 'recorder',
+    component: () => import('@/views/RecorderDetail.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Recorder' }
+  },
+  {
+    path: '/studios',
+    name: 'studios',
+    component: () => import('@/views/Studios.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Studios' }
+  },
+  {
     path: '/sources',
     name: 'sources',
     component: () => import('@/views/Sources.vue'),
-    meta: { requiresAuth: true, title: 'Sources' }
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Sources' }
   },
   {
     path: '/files',
@@ -28,7 +52,7 @@ const routes = [
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/Settings.vue'),
-    meta: { requiresAuth: true, title: 'Settings' }
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Settings' }
   },
   {
     path: '/login',
@@ -58,6 +82,13 @@ router.beforeEach(async (to, from, next) => {
       next({ name: 'login', query: { redirect: to.fullPath } })
       return
     }
+  }
+
+  // Check admin access
+  if (to.meta.requiresAdmin && !authStore.isAdmin) {
+    // Redirect non-admins to overview
+    next({ name: 'overview' })
+    return
   }
 
   next()

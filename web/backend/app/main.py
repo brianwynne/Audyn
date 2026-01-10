@@ -18,6 +18,8 @@ from .api.control import router as control_router
 from .api.sources import router as sources_router
 from .api.assets import router as assets_router
 from .api.stream import router as stream_router
+from .api.recorders import router as recorders_router
+from .api.studios import router as studios_router
 from .websocket.levels import router as ws_router
 from .services.audyn import AudynService
 
@@ -67,6 +69,8 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(control_router, prefix="/api/control", tags=["Control"])
 app.include_router(sources_router, prefix="/api/sources", tags=["Sources"])
+app.include_router(recorders_router, prefix="/api/recorders", tags=["Recorders"])
+app.include_router(studios_router, prefix="/api/studios", tags=["Studios"])
 app.include_router(assets_router, prefix="/api/assets", tags=["Assets"])
 app.include_router(stream_router, prefix="/api/stream", tags=["Streaming"])
 app.include_router(ws_router, prefix="/ws", tags=["WebSocket"])

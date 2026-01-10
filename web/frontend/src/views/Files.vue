@@ -3,7 +3,20 @@
     <div class="d-flex justify-space-between align-center mb-6">
       <h1 class="text-h4">Archive Files</h1>
 
-      <div class="d-flex gap-2">
+      <div class="d-flex gap-2 align-center">
+        <!-- Studio filter (admin only) -->
+        <v-select
+          v-if="authStore.isAdmin"
+          v-model="selectedStudioId"
+          :items="studioOptions"
+          label="Studio"
+          density="compact"
+          hide-details
+          clearable
+          style="max-width: 200px"
+          class="mr-2"
+        />
+
         <v-text-field
           v-model="search"
           prepend-inner-icon="mdi-magnify"
@@ -18,6 +31,18 @@
         </v-btn>
       </div>
     </div>
+
+    <!-- Studio indicator for studio users -->
+    <v-alert
+      v-if="!authStore.isAdmin && currentStudio"
+      type="info"
+      variant="tonal"
+      density="compact"
+      class="mb-4"
+    >
+      <v-icon start>mdi-broadcast</v-icon>
+      Viewing recordings for: <strong>{{ currentStudio.name }}</strong>
+    </v-alert>
 
     <!-- Breadcrumb -->
     <v-breadcrumbs :items="breadcrumbs" class="pa-0 mb-4">
@@ -93,6 +118,7 @@
             <v-icon>mdi-download</v-icon>
           </v-btn>
           <v-btn
+            v-if="canDeleteFile(item)"
             icon
             size="small"
             variant="text"
@@ -145,6 +171,11 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { useStudiosStore } from '@/stores/studios'
+
+const authStore = useAuthStore()
+const studiosStore = useStudiosStore()
 
 // State
 const currentPath = ref('')
@@ -159,10 +190,43 @@ const currentDir = ref({
 })
 const search = ref('')
 const selectedFile = ref(null)
+const selectedStudioId = ref(null)
 const deleteDialog = ref({
   show: false,
   file: null
 })
+
+// Studio options for admin filter
+const studioOptions = computed(() => [
+  { title: 'All Studios', value: null },
+  ...studiosStore.studios.map(s => ({
+    title: s.name,
+    value: s.id
+  }))
+])
+
+// Current studio for studio users
+const currentStudio = computed(() => {
+  if (authStore.isAdmin) {
+    return selectedStudioId.value
+      ? studiosStore.getStudioById(selectedStudioId.value)
+      : null
+  }
+  return authStore.userStudioId
+    ? studiosStore.getStudioById(authStore.userStudioId)
+    : null
+})
+
+// Check if user can delete a file
+function canDeleteFile(file) {
+  // Admins can delete anything
+  if (authStore.isAdmin) return true
+
+  // Studio users can only delete files from their own studio
+  // (In a real implementation, files would have studio_id metadata)
+  // For now, allow deletion if viewing their studio's files
+  return !!currentStudio.value
+}
 
 // Table headers
 const headers = [
@@ -208,7 +272,15 @@ const filteredFiles = computed(() => {
 // Methods
 async function fetchFiles() {
   try {
-    const response = await fetch(`/api/assets/browse?path=${encodeURIComponent(currentPath.value)}`)
+    let url = `/api/assets/browse?path=${encodeURIComponent(currentPath.value)}`
+
+    // Add studio filter
+    const studioId = authStore.isAdmin ? selectedStudioId.value : authStore.userStudioId
+    if (studioId) {
+      url += `&studio_id=${encodeURIComponent(studioId)}`
+    }
+
+    const response = await fetch(url)
     if (response.ok) {
       currentDir.value = await response.json()
     }
@@ -294,8 +366,13 @@ watch(currentPath, () => {
   fetchFiles()
 })
 
+watch(selectedStudioId, () => {
+  fetchFiles()
+})
+
 // Lifecycle
-onMounted(() => {
+onMounted(async () => {
+  await studiosStore.fetchStudios()
   fetchFiles()
 })
 </script>

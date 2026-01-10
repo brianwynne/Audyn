@@ -32,3 +32,15 @@ debian/debhelper-build-stamp
 *.dsc
 *.changes
 *.buildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Node.js
+node_modules/
+dist/
+package-lock.json

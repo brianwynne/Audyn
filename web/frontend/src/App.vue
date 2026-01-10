@@ -32,15 +32,9 @@
       <v-list density="compact" nav>
         <v-list-item
           prepend-icon="mdi-view-dashboard"
-          title="Dashboard"
-          value="dashboard"
-          :to="{ name: 'dashboard' }"
-        />
-        <v-list-item
-          prepend-icon="mdi-access-point-network"
-          title="Sources"
-          value="sources"
-          :to="{ name: 'sources' }"
+          title="Overview"
+          value="overview"
+          :to="{ name: 'overview' }"
         />
         <v-list-item
           prepend-icon="mdi-folder-music"
@@ -48,12 +42,37 @@
           value="files"
           :to="{ name: 'files' }"
         />
-        <v-list-item
-          prepend-icon="mdi-cog"
-          title="Settings"
-          value="settings"
-          :to="{ name: 'settings' }"
-        />
+
+        <!-- Admin-only items -->
+        <template v-if="authStore.isAdmin">
+          <v-divider class="my-2" />
+          <v-list-subheader>Admin</v-list-subheader>
+
+          <v-list-item
+            prepend-icon="mdi-record-circle"
+            title="Recorders"
+            value="recorders"
+            :to="{ name: 'recorders' }"
+          />
+          <v-list-item
+            prepend-icon="mdi-broadcast"
+            title="Studios"
+            value="studios"
+            :to="{ name: 'studios' }"
+          />
+          <v-list-item
+            prepend-icon="mdi-access-point-network"
+            title="Sources"
+            value="sources"
+            :to="{ name: 'sources' }"
+          />
+          <v-list-item
+            prepend-icon="mdi-cog"
+            title="Settings"
+            value="settings"
+            :to="{ name: 'settings' }"
+          />
+        </template>
       </v-list>
 
       <template v-slot:append>
@@ -78,29 +97,18 @@
       </v-app-bar-title>
 
       <template v-slot:append>
-        <!-- Source Selector -->
-        <v-select
-          v-if="captureStore.sources.length"
-          v-model="captureStore.activeSourceId"
-          :items="captureStore.sources"
-          item-title="name"
-          item-value="id"
-          label="Source"
-          density="compact"
-          variant="outlined"
-          hide-details
-          style="max-width: 200px"
-          class="mr-4"
-          @update:model-value="captureStore.switchSource($event)"
-        />
-
         <!-- Recording Status -->
         <v-chip
-          :color="captureStore.isRecording ? 'recording' : 'default'"
-          :prepend-icon="captureStore.isRecording ? 'mdi-record-circle' : 'mdi-stop-circle'"
+          :color="recordingCount > 0 ? 'error' : 'default'"
+          :prepend-icon="recordingCount > 0 ? 'mdi-record-circle' : 'mdi-stop-circle'"
           class="mr-4"
         >
-          {{ captureStore.isRecording ? 'RECORDING' : 'STOPPED' }}
+          <template v-if="recordingCount > 0">
+            {{ recordingCount }} REC
+          </template>
+          <template v-else>
+            STOPPED
+          </template>
         </v-chip>
 
         <!-- Theme Toggle -->
@@ -138,11 +146,18 @@ import { useTheme } from 'vuetify'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useCaptureStore } from '@/stores/capture'
+import { useRecordersStore } from '@/stores/recorders'
 
 const router = useRouter()
 const theme = useTheme()
 const authStore = useAuthStore()
 const captureStore = useCaptureStore()
+const recordersStore = useRecordersStore()
+
+// Recording count across all recorders
+const recordingCount = computed(() =>
+  recordersStore.recordingRecorders.length
+)
 
 // UI State
 const drawer = ref(true)
@@ -175,6 +190,7 @@ const initials = computed(() => {
 // Logout handler
 async function handleLogout() {
   captureStore.disconnectLevels()
+  recordersStore.disconnectLevels()
   await authStore.logout()
   router.push({ name: 'login' })
 }
@@ -184,7 +200,8 @@ onMounted(async () => {
   if (authStore.isAuthenticated) {
     await captureStore.fetchStatus()
     await captureStore.fetchSources()
-    captureStore.connectLevels()
+    await recordersStore.fetchRecorders()
+    recordersStore.connectLevels()
   }
 })
 
@@ -193,9 +210,10 @@ watch(() => authStore.isAuthenticated, async (isAuth) => {
   if (isAuth) {
     await captureStore.fetchStatus()
     await captureStore.fetchSources()
-    captureStore.connectLevels()
+    await recordersStore.fetchRecorders()
+    recordersStore.connectLevels()
   } else {
-    captureStore.disconnectLevels()
+    recordersStore.disconnectLevels()
   }
 })
 

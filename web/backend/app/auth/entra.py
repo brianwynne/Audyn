@@ -52,12 +52,8 @@ class EntraConfig:
 config = EntraConfig()
 
 
-# Models
-class User(BaseModel):
-    id: str
-    email: str
-    name: str
-    roles: list[str] = []
+# Import User model
+from ..models import User, UserRole
 
 
 class TokenResponse(BaseModel):
@@ -70,11 +66,12 @@ class TokenResponse(BaseModel):
 # Development mode flag
 DEV_MODE = os.getenv("AUDYN_DEV_MODE", "true").lower() == "true"
 
-# Development user for testing
+# Development user for testing (admin)
 DEV_USER = User(
     id="dev-user-001",
-    email="developer@audyn.local",
-    name="Development User",
+    email="admin@audyn.local",
+    name="Admin User",
+    role=UserRole.ADMIN,
     roles=["admin"]
 )
 
