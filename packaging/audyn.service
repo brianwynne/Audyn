@@ -1,0 +1,71 @@
+#
+# Audyn systemd service - AES67 Audio Capture
+#
+# Copyright: (c) 2026 B. Wynne
+# Author: B. Wynne
+#
+# Usage:
+#   sudo cp packaging/audyn.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable audyn
+#   sudo systemctl start audyn
+#
+# Configure via /etc/audyn/audyn.conf or override ExecStart
+#
+
+[Unit]
+Description=Audyn AES67 Audio Capture Service
+After=network-online.target
+Wants=network-online.target
+
+# If using PipeWire fallback, uncomment:
+# After=pipewire.service
+# Requires=pipewire.service
+
+[Service]
+Type=simple
+
+# AES67 capture example (edit for your network):
+ExecStart=/usr/local/bin/audyn \
+    -o /var/lib/audyn/capture.opus \
+    -m 239.69.1.1 \
+    -p 5004 \
+    --pt 96 \
+    --spp 48 \
+    -r 48000 \
+    -c 2 \
+    --bitrate 128000
+
+# PipeWire fallback example:
+# ExecStart=/usr/local/bin/audyn -o /var/lib/audyn/capture.wav --pipewire
+
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+# Create output directory
+ExecStartPre=/bin/mkdir -p /var/lib/audyn
+
+# Audio/network permissions
+User=audyn
+Group=audio
+SupplementaryGroups=audio
+
+# Realtime scheduling
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Nice=-10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/audyn
+
+# Network access for AES67
+PrivateNetwork=false
+
+[Install]
+WantedBy=multi-user.target

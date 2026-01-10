@@ -1,0 +1,22 @@
+# Build artifacts
+*.o
+audyn
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Debug files
+*.dSYM/
+
+# Test output
+/tmp/audyn-test/
+
+# Archives
+*.zip
+
+# MS Office temp files
+~$*
