@@ -17,6 +17,14 @@ This produces `audyn_1.0.0_amd64.deb`.
 sudo apt install ./audyn_1.0.0_amd64.deb
 ```
 
+## First Login
+
+After installation, access the web interface at `http://<management-ip>/`
+
+**Default breakglass password:** `audyn`
+
+**Change this password immediately** via Settings > Authentication.
+
 ## What Gets Installed
 
 | Path | Description |

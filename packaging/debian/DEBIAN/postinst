@@ -65,6 +65,24 @@ EOFCONFIG
             chmod 640 "$AUDYN_CONFIG/global.json"
         fi
 
+        # Create default auth configuration with breakglass password
+        if [ ! -f "$AUDYN_CONFIG/auth.json" ]; then
+            cat > "$AUDYN_CONFIG/auth.json" << 'EOFAUTH'
+{
+  "entra_tenant_id": null,
+  "entra_client_id": null,
+  "entra_redirect_uri": null,
+  "breakglass_password_hash": "$2b$12$G43XJz5S3qJodySjUgu0LOvh4Ns5xxZ2.me7Wspv9z4QmL7KOxpte"
+}
+EOFAUTH
+            chown "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_CONFIG/auth.json"
+            chmod 640 "$AUDYN_CONFIG/auth.json"
+            echo ""
+            echo "  DEFAULT BREAKGLASS PASSWORD: audyn"
+            echo "  Please change this immediately after login!"
+            echo ""
+        fi
+
         # Set up Python virtual environment
         if [ ! -d "$AUDYN_OPT/backend/venv" ]; then
             echo "Setting up Python virtual environment..."
@@ -98,12 +116,13 @@ EOFCONFIG
         echo "========================================"
         echo ""
         echo "Web interface: http://<management-ip>/"
+        echo ""
+        echo "Login with breakglass password: audyn"
+        echo "CHANGE THIS PASSWORD IMMEDIATELY!"
+        echo ""
         echo "Default archive: $AUDYN_ARCHIVE"
         echo "Configuration: $AUDYN_CONFIG"
         echo "Logs: $AUDYN_LOG"
-        echo ""
-        echo "Configure authentication via the web UI"
-        echo "at Settings > Authentication Settings"
         echo ""
         ;;
 
