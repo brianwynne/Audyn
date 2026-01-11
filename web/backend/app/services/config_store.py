@@ -32,6 +32,8 @@ CONFIG_FILES = {
     "auth": "auth.json",            # Authentication settings (Entra ID, breakglass)
     "system": "system.json",        # System settings (hostname, timezone, NTP)
     "ssl": "ssl.json",              # SSL certificate configuration
+    "network": "network.json",      # Control interface network configuration
+    "aes67_network": "aes67_network.json",  # AES67 interface network configuration
 }
 
 
@@ -294,3 +296,23 @@ def load_ssl_config() -> Optional[dict]:
 def save_ssl_config(ssl: dict) -> bool:
     """Save SSL certificate configuration."""
     return get_config_store().save("ssl", ssl)
+
+
+def load_network_config() -> Optional[dict]:
+    """Load network configuration."""
+    return get_config_store().load("network")
+
+
+def save_network_config(network: dict) -> bool:
+    """Save network configuration."""
+    return get_config_store().save("network", network)
+
+
+def load_aes67_network_config() -> Optional[dict]:
+    """Load AES67 network configuration."""
+    return get_config_store().load("aes67_network")
+
+
+def save_aes67_network_config(network: dict) -> bool:
+    """Save AES67 network configuration."""
+    return get_config_store().save("aes67_network", network)

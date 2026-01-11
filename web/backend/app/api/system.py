@@ -16,7 +16,9 @@ from pydantic import BaseModel
 from ..auth.entra import get_current_user, User
 from ..services.config_store import (
     load_system_config, save_system_config,
-    load_ssl_config, save_ssl_config
+    load_ssl_config, save_ssl_config,
+    load_network_config, save_network_config,
+    load_aes67_network_config, save_aes67_network_config
 )
 
 logger = logging.getLogger(__name__)
@@ -61,14 +63,40 @@ class NetworkInterface(BaseModel):
     """Network interface information."""
     name: str
     ip_address: Optional[str] = None
+    netmask: Optional[str] = None
     mac_address: Optional[str] = None
     is_up: bool = True
+
+
+class NetworkConfig(BaseModel):
+    """Network configuration for an interface."""
+    interface: str  # Interface name (e.g., "eth0")
+    mode: str = "dhcp"  # "dhcp" or "static"
+    ip_address: Optional[str] = None
+    netmask: Optional[str] = "255.255.255.0"
+    gateway: Optional[str] = None
+    dns_servers: list[str] = []
+
+
+class ControlInterfaceConfig(BaseModel):
+    """Control interface configuration."""
+    interface: Optional[str] = None  # Which NIC is the control interface
+    network: Optional[NetworkConfig] = None  # Network settings for that interface
+    bind_services: bool = True  # Whether to bind nginx/backend to this interface only
+
+
+class AES67InterfaceConfig(BaseModel):
+    """AES67 interface configuration."""
+    interface: Optional[str] = None  # Which NIC is the AES67 interface
+    network: Optional[NetworkConfig] = None  # Network settings for that interface
 
 
 # ============ In-memory state ============
 
 _system_config: Optional[SystemConfig] = None
 _ssl_config: Optional[SSLConfig] = None
+_control_interface_config: Optional[ControlInterfaceConfig] = None
+_aes67_interface_config: Optional[AES67InterfaceConfig] = None
 
 
 def _load_system_config_from_store():
@@ -99,9 +127,39 @@ def _load_ssl_config_from_store():
         _ssl_config = SSLConfig()
 
 
+def _load_network_config_from_store():
+    """Load control interface config from persistent storage."""
+    global _control_interface_config
+    saved = load_network_config()
+    if saved:
+        try:
+            _control_interface_config = ControlInterfaceConfig(**saved)
+        except Exception as e:
+            logger.error(f"Failed to parse saved network config: {e}")
+            _control_interface_config = ControlInterfaceConfig()
+    else:
+        _control_interface_config = ControlInterfaceConfig()
+
+
+def _load_aes67_config_from_store():
+    """Load AES67 interface config from persistent storage."""
+    global _aes67_interface_config
+    saved = load_aes67_network_config()
+    if saved:
+        try:
+            _aes67_interface_config = AES67InterfaceConfig(**saved)
+        except Exception as e:
+            logger.error(f"Failed to parse saved AES67 network config: {e}")
+            _aes67_interface_config = AES67InterfaceConfig()
+    else:
+        _aes67_interface_config = AES67InterfaceConfig()
+
+
 # Load on module import
 _load_system_config_from_store()
 _load_ssl_config_from_store()
+_load_network_config_from_store()
+_load_aes67_config_from_store()
 
 
 # ============ Helper functions ============
@@ -229,6 +287,347 @@ def configure_ntp_servers(servers: list[str]) -> bool:
         return True
     except Exception as e:
         logger.error(f"Failed to configure NTP: {e}")
+        return False
+
+
+def apply_network_config(config: NetworkConfig) -> tuple[bool, str]:
+    """
+    Apply network configuration using netplan (Ubuntu/Debian).
+
+    Creates a netplan YAML config and applies it.
+    """
+    try:
+        netplan_dir = "/etc/netplan"
+        netplan_file = f"{netplan_dir}/99-audyn-control.yaml"
+
+        if config.mode == "dhcp":
+            netplan_config = f"""# Audyn control interface configuration
+# Auto-generated - do not edit manually
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    {config.interface}:
+      dhcp4: true
+"""
+        else:
+            # Static configuration
+            dns_line = ""
+            if config.dns_servers:
+                dns_list = ", ".join(config.dns_servers)
+                dns_line = f"\n      nameservers:\n        addresses: [{dns_list}]"
+
+            routes_line = ""
+            if config.gateway:
+                routes_line = f"\n      routes:\n        - to: default\n          via: {config.gateway}"
+
+            netplan_config = f"""# Audyn control interface configuration
+# Auto-generated - do not edit manually
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    {config.interface}:
+      dhcp4: false
+      addresses:
+        - {config.ip_address}/{netmask_to_cidr(config.netmask)}{routes_line}{dns_line}
+"""
+
+        # Write netplan config
+        with open(netplan_file, 'w') as f:
+            f.write(netplan_config)
+        os.chmod(netplan_file, 0o600)
+
+        # Apply netplan
+        result = subprocess.run(
+            ["netplan", "apply"],
+            capture_output=True, text=True, timeout=30
+        )
+
+        if result.returncode != 0:
+            logger.error(f"Netplan apply failed: {result.stderr}")
+            return False, result.stderr
+
+        logger.info(f"Network config applied for {config.interface}")
+        return True, "Network configuration applied successfully"
+
+    except FileNotFoundError:
+        # Netplan not available, try ifupdown
+        return apply_network_config_ifupdown(config)
+    except Exception as e:
+        logger.error(f"Failed to apply network config: {e}")
+        return False, str(e)
+
+
+def apply_network_config_ifupdown(config: NetworkConfig) -> tuple[bool, str]:
+    """
+    Apply network configuration using ifupdown (fallback for non-netplan systems).
+    """
+    try:
+        interfaces_file = "/etc/network/interfaces.d/audyn-control"
+
+        if config.mode == "dhcp":
+            iface_config = f"""# Audyn control interface configuration
+auto {config.interface}
+iface {config.interface} inet dhcp
+"""
+        else:
+            dns_line = ""
+            if config.dns_servers:
+                dns_line = f"\n    dns-nameservers {' '.join(config.dns_servers)}"
+
+            gateway_line = ""
+            if config.gateway:
+                gateway_line = f"\n    gateway {config.gateway}"
+
+            iface_config = f"""# Audyn control interface configuration
+auto {config.interface}
+iface {config.interface} inet static
+    address {config.ip_address}
+    netmask {config.netmask}{gateway_line}{dns_line}
+"""
+
+        with open(interfaces_file, 'w') as f:
+            f.write(iface_config)
+
+        # Restart networking
+        subprocess.run(
+            ["ifdown", config.interface],
+            capture_output=True, timeout=10
+        )
+        result = subprocess.run(
+            ["ifup", config.interface],
+            capture_output=True, text=True, timeout=30
+        )
+
+        if result.returncode != 0:
+            return False, result.stderr
+
+        logger.info(f"Network config applied for {config.interface} (ifupdown)")
+        return True, "Network configuration applied successfully"
+
+    except Exception as e:
+        logger.error(f"Failed to apply network config (ifupdown): {e}")
+        return False, str(e)
+
+
+def netmask_to_cidr(netmask: str) -> int:
+    """Convert netmask to CIDR prefix length."""
+    if not netmask:
+        return 24
+    try:
+        parts = netmask.split('.')
+        binary = ''.join([bin(int(x)).count('1') for x in parts])
+        return sum([bin(int(x)).count('1') for x in parts])
+    except:
+        return 24
+
+
+def update_nginx_binding(ip_address: str, ssl_enabled: bool = False, domain: str = None) -> bool:
+    """
+    Update nginx to bind to a specific IP address.
+    """
+    try:
+        if ssl_enabled and domain:
+            # Get current SSL config to find cert paths
+            ssl_config = _ssl_config
+            if ssl_config and ssl_config.cert_type == "manual":
+                cert_path = f"/etc/audyn/ssl/{domain}.crt"
+                key_path = f"/etc/audyn/ssl/{domain}.key"
+            else:
+                cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
+                key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+
+            nginx_config = f"""# Audyn Web Interface - Bound to {ip_address}
+# Auto-configured by Audyn
+
+upstream audyn_backend {{
+    server 127.0.0.1:8000;
+    keepalive 32;
+}}
+
+# Redirect HTTP to HTTPS
+server {{
+    listen {ip_address}:80;
+    server_name {domain} _;
+    return 301 https://$host$request_uri;
+}}
+
+server {{
+    listen {ip_address}:443 ssl http2;
+    server_name {domain} _;
+
+    ssl_certificate {cert_path};
+    ssl_certificate_key {key_path};
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+    ssl_prefer_server_ciphers off;
+
+    add_header Strict-Transport-Security "max-age=63072000" always;
+
+    root /opt/audyn/frontend;
+    index index.html;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+    gzip_min_length 1000;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    location /api/ {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }}
+
+    location /auth/ {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+
+    location /ws/ {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }}
+
+    location /health {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }}
+
+    location / {{
+        try_files $uri $uri/ /index.html;
+        location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {{
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }}
+    }}
+
+    location ~ /\\. {{
+        deny all;
+    }}
+}}
+"""
+        else:
+            # HTTP only
+            nginx_config = f"""# Audyn Web Interface - Bound to {ip_address}
+# Auto-configured by Audyn
+
+upstream audyn_backend {{
+    server 127.0.0.1:8000;
+    keepalive 32;
+}}
+
+server {{
+    listen {ip_address}:80;
+
+    server_name _;
+
+    root /opt/audyn/frontend;
+    index index.html;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+    gzip_min_length 1000;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    location /api/ {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }}
+
+    location /auth/ {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+
+    location /ws/ {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }}
+
+    location /health {{
+        proxy_pass http://audyn_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }}
+
+    location / {{
+        try_files $uri $uri/ /index.html;
+        location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {{
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }}
+    }}
+
+    location ~ /\\. {{
+        deny all;
+    }}
+}}
+"""
+
+        with open('/etc/nginx/sites-available/audyn', 'w') as f:
+            f.write(nginx_config)
+
+        # Test and reload nginx
+        test_result = subprocess.run(
+            ["nginx", "-t"],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if test_result.returncode != 0:
+            logger.error(f"Nginx config test failed: {test_result.stderr}")
+            return False
+
+        subprocess.run(["systemctl", "reload", "nginx"], timeout=10)
+        logger.info(f"Nginx bound to {ip_address}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to update nginx binding: {e}")
         return False
 
 
@@ -871,3 +1270,130 @@ async def upload_ssl_certificate(
         }
     else:
         raise HTTPException(status_code=400, detail=result)  # result contains error message
+
+
+# ============ Network Configuration Endpoints ============
+
+@router.get("/network", response_model=ControlInterfaceConfig)
+async def get_network_config(user: User = Depends(get_current_user)):
+    """Get control interface network configuration."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return _control_interface_config
+
+
+@router.post("/network")
+async def set_network_config(
+    config: ControlInterfaceConfig,
+    user: User = Depends(get_current_user)
+):
+    """Set control interface network configuration."""
+    global _control_interface_config
+
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    warnings = []
+
+    # Apply network configuration if provided
+    if config.network:
+        success, message = apply_network_config(config.network)
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to apply network configuration: {message}"
+            )
+
+    # Update nginx binding if requested
+    if config.bind_services and config.network and config.network.ip_address:
+        ssl_enabled = _ssl_config and _ssl_config.enabled
+        domain = _ssl_config.domain if ssl_enabled else None
+
+        if not update_nginx_binding(config.network.ip_address, ssl_enabled, domain):
+            warnings.append("Failed to update nginx binding")
+
+    # Save configuration
+    _control_interface_config = config
+    if not save_network_config(config.model_dump()):
+        warnings.append("Failed to persist network configuration")
+
+    logger.info(f"Network config updated by {user.email}")
+
+    return {
+        "message": "Network configuration updated",
+        "config": _control_interface_config,
+        "warnings": warnings if warnings else None
+    }
+
+
+@router.get("/network/current")
+async def get_current_network_info(user: User = Depends(get_current_user)):
+    """Get current network status for all interfaces."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    interfaces = get_network_interfaces()
+
+    # Add gateway info
+    gateway = None
+    try:
+        import netifaces
+        gws = netifaces.gateways()
+        if 'default' in gws and netifaces.AF_INET in gws['default']:
+            gateway = gws['default'][netifaces.AF_INET][0]
+    except:
+        pass
+
+    return {
+        "interfaces": interfaces,
+        "default_gateway": gateway,
+        "configured": _control_interface_config.interface if _control_interface_config else None
+    }
+
+
+# ============ AES67 Network Configuration Endpoints ============
+
+@router.get("/aes67", response_model=AES67InterfaceConfig)
+async def get_aes67_config(user: User = Depends(get_current_user)):
+    """Get AES67 interface network configuration."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return _aes67_interface_config
+
+
+@router.post("/aes67")
+async def set_aes67_config(
+    config: AES67InterfaceConfig,
+    user: User = Depends(get_current_user)
+):
+    """Set AES67 interface network configuration."""
+    global _aes67_interface_config
+
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    warnings = []
+
+    # Apply network configuration if provided
+    if config.network:
+        success, message = apply_network_config(config.network)
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to apply AES67 network configuration: {message}"
+            )
+
+    # Save configuration
+    _aes67_interface_config = config
+    if not save_aes67_network_config(config.model_dump()):
+        warnings.append("Failed to persist AES67 network configuration")
+
+    logger.info(f"AES67 network config updated by {user.email}")
+
+    return {
+        "message": "AES67 network configuration updated",
+        "config": _aes67_interface_config,
+        "warnings": warnings if warnings else None
+    }

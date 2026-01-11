@@ -1,273 +1,576 @@
 <template>
   <v-container fluid class="pa-6">
-    <h1 class="text-h4 mb-6">Settings</h1>
+    <!-- Header with Save Actions -->
+    <div class="d-flex align-center justify-space-between mb-6">
+      <h1 class="text-h4">Settings</h1>
+      <div>
+        <v-btn
+          variant="outlined"
+          class="mr-3"
+          @click="resetSettings"
+        >
+          Reset to Defaults
+        </v-btn>
+        <v-btn
+          color="primary"
+          prepend-icon="mdi-content-save"
+          :loading="saving"
+          @click="saveSettings"
+        >
+          Save All Settings
+        </v-btn>
+      </div>
+    </div>
 
-    <v-row>
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- NETWORK CONFIGURATION SECTION -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
+      <v-icon icon="mdi-network" size="small" class="mr-2" />
+      Network Configuration
+    </div>
+
+    <v-row class="mb-6">
+      <!-- Control Interface -->
+      <v-col cols="12" lg="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-ethernet" class="mr-2" color="primary" />
+            Control Interface
+            <v-chip size="x-small" class="ml-2" color="info" variant="tonal">Management</v-chip>
+          </v-card-title>
+          <v-card-text class="pt-4">
+            <v-row dense>
+              <v-col cols="12" sm="6">
+                <v-select
+                  v-model="networkConfig.interface"
+                  label="Network Interface"
+                  :items="interfaces"
+                  item-title="display"
+                  item-value="name"
+                  variant="outlined"
+                  density="compact"
+                  hide-details="auto"
+                />
+              </v-col>
+              <v-col cols="12" sm="6">
+                <v-select
+                  v-model="networkConfig.mode"
+                  label="IP Mode"
+                  :items="[
+                    { title: 'DHCP', value: 'dhcp' },
+                    { title: 'Static', value: 'static' }
+                  ]"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </v-row>
+
+            <v-expand-transition>
+              <div v-if="networkConfig.mode === 'static'">
+                <v-row dense class="mt-2">
+                  <v-col cols="12" sm="4">
+                    <v-text-field
+                      v-model="networkConfig.ip_address"
+                      label="IP Address"
+                      placeholder="192.168.1.100"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="12" sm="4">
+                    <v-text-field
+                      v-model="networkConfig.netmask"
+                      label="Netmask"
+                      placeholder="255.255.255.0"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="12" sm="4">
+                    <v-text-field
+                      v-model="networkConfig.gateway"
+                      label="Gateway"
+                      placeholder="192.168.1.1"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                </v-row>
+                <v-row dense class="mt-2">
+                  <v-col cols="12" sm="8">
+                    <v-combobox
+                      v-model="networkConfig.dns_servers"
+                      label="DNS Servers"
+                      multiple
+                      chips
+                      closable-chips
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="12" sm="4" class="d-flex align-center">
+                    <v-checkbox
+                      v-model="networkConfig.bind_services"
+                      label="Bind to this IP only"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                </v-row>
+              </div>
+            </v-expand-transition>
+
+            <v-alert
+              v-if="networkConfig.mode === 'static'"
+              type="warning"
+              variant="tonal"
+              density="compact"
+              class="mt-4"
+            >
+              Changing IP may disconnect you. Ensure you can access the new address.
+            </v-alert>
+          </v-card-text>
+          <v-card-actions class="px-4 pb-4">
+            <v-btn
+              color="primary"
+              variant="tonal"
+              :loading="networkSaving"
+              :disabled="!networkConfig.interface"
+              @click="saveNetworkConfig"
+            >
+              Apply Control Network
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-col>
+
+      <!-- AES67 Interface -->
+      <v-col cols="12" lg="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-waveform" class="mr-2" color="success" />
+            AES67 Interface
+            <v-chip size="x-small" class="ml-2" color="success" variant="tonal">Audio</v-chip>
+          </v-card-title>
+          <v-card-text class="pt-4">
+            <v-row dense>
+              <v-col cols="12" sm="6">
+                <v-select
+                  v-model="aes67Config.interface"
+                  label="Network Interface"
+                  :items="interfaces"
+                  item-title="display"
+                  item-value="name"
+                  variant="outlined"
+                  density="compact"
+                  hide-details="auto"
+                />
+              </v-col>
+              <v-col cols="12" sm="6">
+                <v-select
+                  v-model="aes67Config.mode"
+                  label="IP Mode"
+                  :items="[
+                    { title: 'DHCP', value: 'dhcp' },
+                    { title: 'Static', value: 'static' }
+                  ]"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </v-row>
+
+            <v-expand-transition>
+              <div v-if="aes67Config.mode === 'static'">
+                <v-row dense class="mt-2">
+                  <v-col cols="12" sm="4">
+                    <v-text-field
+                      v-model="aes67Config.ip_address"
+                      label="IP Address"
+                      placeholder="192.168.2.100"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="12" sm="4">
+                    <v-text-field
+                      v-model="aes67Config.netmask"
+                      label="Netmask"
+                      placeholder="255.255.255.0"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="12" sm="4">
+                    <v-text-field
+                      v-model="aes67Config.gateway"
+                      label="Gateway"
+                      placeholder="192.168.2.1"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                    />
+                  </v-col>
+                </v-row>
+              </div>
+            </v-expand-transition>
+
+            <v-alert
+              type="info"
+              variant="tonal"
+              density="compact"
+              class="mt-4"
+            >
+              AES67 networks are typically isolated. Gateway and DNS are usually not required.
+            </v-alert>
+          </v-card-text>
+          <v-card-actions class="px-4 pb-4">
+            <v-btn
+              color="success"
+              variant="tonal"
+              :loading="aes67Saving"
+              :disabled="!aes67Config.interface"
+              @click="saveAES67Config"
+            >
+              Apply AES67 Network
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- RECORDING SETTINGS SECTION -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
+      <v-icon icon="mdi-record-rec" size="small" class="mr-2" />
+      Recording Settings
+    </div>
+
+    <v-row class="mb-6">
       <!-- Archive Settings -->
-      <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-archive" class="mr-2" />
-            Archive Settings
+      <v-col cols="12" md="6" lg="4">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-archive" class="mr-2" color="warning" />
+            Archive Storage
           </v-card-title>
-          <v-card-text>
-            <v-form>
-              <v-text-field
-                v-model="config.archiveRoot"
-                label="Archive Directory"
-                prepend-inner-icon="mdi-folder"
-              />
-
-              <v-select
-                v-model="config.archiveLayout"
-                label="Naming Layout"
-                :items="layouts"
-                item-title="title"
-                item-value="value"
-              />
-
-              <v-text-field
-                v-model.number="config.archivePeriod"
-                label="Rotation Period"
-                type="number"
-                suffix="seconds"
-                hint="3600 = 1 hour, 86400 = 24 hours"
-                persistent-hint
-              />
-
-              <v-select
-                v-model="config.archiveClock"
-                label="Clock Source"
-                :items="[
-                  { title: 'Local Time', value: 'localtime' },
-                  { title: 'UTC', value: 'utc' },
-                  { title: 'PTP/TAI', value: 'ptp' }
-                ]"
-                item-title="title"
-                item-value="value"
-              />
-            </v-form>
+          <v-card-text class="pt-4">
+            <v-text-field
+              v-model="config.archiveRoot"
+              label="Archive Directory"
+              prepend-inner-icon="mdi-folder"
+              variant="outlined"
+              density="compact"
+              class="mb-3"
+            />
+            <v-select
+              v-model="config.archiveLayout"
+              label="File Naming Layout"
+              :items="layouts"
+              item-title="title"
+              item-value="value"
+              variant="outlined"
+              density="compact"
+              class="mb-3"
+            />
+            <v-text-field
+              v-model.number="config.archivePeriod"
+              label="Rotation Period"
+              type="number"
+              suffix="seconds"
+              variant="outlined"
+              density="compact"
+              hint="3600 = 1 hour, 86400 = 24 hours"
+              persistent-hint
+            />
           </v-card-text>
         </v-card>
       </v-col>
 
-      <!-- AES67 Network Settings -->
-      <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-lan" class="mr-2" />
-            AES67 Network
+      <!-- Timing Settings -->
+      <v-col cols="12" md="6" lg="4">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-clock-outline" class="mr-2" color="info" />
+            Timing & Sync
           </v-card-title>
-          <v-card-text>
-            <v-form>
-              <v-select
-                v-model="config.aes67Interface"
-                label="AES67 Interface"
-                :items="interfaces"
-                item-title="display"
-                item-value="name"
-                hint="Network interface for multicast audio reception"
-                persistent-hint
-                clearable
-              />
-            </v-form>
+          <v-card-text class="pt-4">
+            <v-select
+              v-model="config.archiveClock"
+              label="Clock Source"
+              :items="[
+                { title: 'Local Time', value: 'localtime' },
+                { title: 'UTC', value: 'utc' },
+                { title: 'PTP/TAI', value: 'ptp' }
+              ]"
+              item-title="title"
+              item-value="value"
+              variant="outlined"
+              density="compact"
+              class="mb-3"
+            />
+            <v-select
+              v-model="config.ptpInterface"
+              label="PTP Network Interface"
+              :items="interfaces"
+              item-title="display"
+              item-value="name"
+              variant="outlined"
+              density="compact"
+              hint="Leave empty to disable PTP sync"
+              persistent-hint
+              clearable
+            />
           </v-card-text>
         </v-card>
       </v-col>
 
-      <!-- PTP Settings -->
-      <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-clock-outline" class="mr-2" />
-            PTP Settings
+      <!-- System Info -->
+      <v-col cols="12" md="12" lg="4">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-information-outline" class="mr-2" color="grey" />
+            System Status
           </v-card-title>
-          <v-card-text>
-            <v-form>
-              <v-text-field
-                v-model="config.ptpInterface"
-                label="PTP Network Interface"
-                placeholder="eth0"
-                hint="Leave empty to disable PTP"
-                persistent-hint
-              />
-            </v-form>
+          <v-card-text class="pt-4">
+            <v-list density="compact" class="bg-transparent">
+              <v-list-item class="px-0">
+                <template v-slot:prepend>
+                  <v-icon icon="mdi-tag" size="small" class="mr-2" />
+                </template>
+                <v-list-item-title class="text-caption text-medium-emphasis">Version</v-list-item-title>
+                <v-list-item-subtitle class="text-body-2">Audyn v1.0.0</v-list-item-subtitle>
+              </v-list-item>
+              <v-list-item class="px-0">
+                <template v-slot:prepend>
+                  <v-icon icon="mdi-server" size="small" class="mr-2" />
+                </template>
+                <v-list-item-title class="text-caption text-medium-emphasis">Backend</v-list-item-title>
+                <v-list-item-subtitle>
+                  <v-chip color="success" size="x-small" variant="flat">Connected</v-chip>
+                </v-list-item-subtitle>
+              </v-list-item>
+              <v-list-item class="px-0">
+                <template v-slot:prepend>
+                  <v-icon icon="mdi-database" size="small" class="mr-2" />
+                </template>
+                <v-list-item-title class="text-caption text-medium-emphasis">Archive</v-list-item-title>
+                <v-list-item-subtitle class="text-body-2">
+                  {{ stats.totalFiles }} files, {{ stats.totalSize }}
+                </v-list-item-subtitle>
+              </v-list-item>
+            </v-list>
           </v-card-text>
         </v-card>
       </v-col>
+    </v-row>
 
-      <!-- System Settings -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SYSTEM CONFIGURATION SECTION -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
+      <v-icon icon="mdi-cog" size="small" class="mr-2" />
+      System Configuration
+    </div>
+
+    <v-row class="mb-6">
+      <!-- Hostname & Time -->
       <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-cog" class="mr-2" />
-            System Settings
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-server-network" class="mr-2" color="purple" />
+            Hostname & Time
           </v-card-title>
-          <v-card-text>
-            <v-form>
-              <v-text-field
-                v-model="systemConfig.hostname"
-                label="Hostname"
-                hint="System hostname (requires restart to apply)"
-                persistent-hint
-              />
-
-              <v-autocomplete
-                v-model="systemConfig.timezone"
-                :items="timezones"
-                label="Timezone"
-                class="mt-4"
-              />
-
-              <v-combobox
-                v-model="systemConfig.ntp_servers"
-                label="NTP Servers"
-                multiple
-                chips
-                closable-chips
-                hint="Press Enter to add a server"
-                persistent-hint
-                class="mt-4"
-              />
-            </v-form>
+          <v-card-text class="pt-4">
+            <v-text-field
+              v-model="systemConfig.hostname"
+              label="Hostname"
+              variant="outlined"
+              density="compact"
+              hint="Requires restart to apply"
+              persistent-hint
+              class="mb-3"
+            />
+            <v-autocomplete
+              v-model="systemConfig.timezone"
+              :items="timezones"
+              label="Timezone"
+              variant="outlined"
+              density="compact"
+              class="mb-3"
+            />
+            <v-combobox
+              v-model="systemConfig.ntp_servers"
+              label="NTP Servers"
+              multiple
+              chips
+              closable-chips
+              variant="outlined"
+              density="compact"
+              hint="Press Enter to add a server"
+              persistent-hint
+            />
           </v-card-text>
         </v-card>
       </v-col>
 
       <!-- SSL Certificate -->
-      <v-col cols="12">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-lock" class="mr-2" />
+      <v-col cols="12" md="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-lock" class="mr-2" color="success" />
             SSL Certificate
+            <v-chip
+              v-if="sslConfig.enabled"
+              size="x-small"
+              class="ml-2"
+              color="success"
+              variant="flat"
+            >
+              Active
+            </v-chip>
+            <v-chip
+              v-else
+              size="x-small"
+              class="ml-2"
+              color="warning"
+              variant="tonal"
+            >
+              HTTP Only
+            </v-chip>
           </v-card-title>
-          <v-card-text>
+          <v-card-text class="pt-4">
             <v-alert
               v-if="sslConfig.enabled"
               type="success"
               variant="tonal"
+              density="compact"
               class="mb-4"
             >
-              SSL enabled for {{ sslConfig.domain }}
-              <span v-if="sslConfig.cert_type">
+              <strong>{{ sslConfig.domain }}</strong>
+              <span class="text-caption ml-2">
                 ({{ sslConfig.cert_type === 'letsencrypt' ? "Let's Encrypt" : 'Manual' }})
               </span>
-              <span v-if="sslConfig.cert_expiry">
-                - expires {{ formatDate(sslConfig.cert_expiry) }}
+              <span v-if="sslConfig.cert_expiry" class="text-caption ml-2">
+                Expires {{ formatDate(sslConfig.cert_expiry) }}
               </span>
             </v-alert>
-            <v-alert
-              v-else
-              type="warning"
-              variant="tonal"
-              class="mb-4"
-            >
-              SSL not configured - using HTTP
-            </v-alert>
 
-            <v-tabs v-model="sslTab" class="mb-4">
-              <v-tab value="letsencrypt">Let's Encrypt (Auto)</v-tab>
-              <v-tab value="manual">Manual Upload</v-tab>
+            <v-tabs v-model="sslTab" density="compact" class="mb-4">
+              <v-tab value="letsencrypt" size="small">Let's Encrypt</v-tab>
+              <v-tab value="manual" size="small">Manual Upload</v-tab>
             </v-tabs>
 
             <v-window v-model="sslTab">
-              <!-- Let's Encrypt Tab -->
               <v-window-item value="letsencrypt">
-                <v-alert type="info" variant="tonal" density="compact" class="mb-4">
-                  Requires port 80 to be accessible from the internet for domain verification.
+                <v-row dense>
+                  <v-col cols="12">
+                    <v-text-field
+                      v-model="sslConfig.domain"
+                      label="Domain Name"
+                      placeholder="audyn.example.com"
+                      variant="outlined"
+                      density="compact"
+                      class="mb-2"
+                    />
+                  </v-col>
+                  <v-col cols="12">
+                    <v-text-field
+                      v-model="sslConfig.email"
+                      label="Email"
+                      type="email"
+                      placeholder="admin@example.com"
+                      variant="outlined"
+                      density="compact"
+                    />
+                  </v-col>
+                </v-row>
+                <v-alert type="info" variant="tonal" density="compact" class="mt-3 mb-3">
+                  Requires port 80 accessible from internet.
                 </v-alert>
-                <v-form>
-                  <v-row>
-                    <v-col cols="12" md="6">
-                      <v-text-field
-                        v-model="sslConfig.domain"
-                        label="Domain Name"
-                        placeholder="audyn.example.com"
-                        hint="Public domain name pointing to this server"
-                        persistent-hint
-                      />
-                    </v-col>
-                    <v-col cols="12" md="6">
-                      <v-text-field
-                        v-model="sslConfig.email"
-                        label="Email for Let's Encrypt"
-                        type="email"
-                        placeholder="admin@example.com"
-                        hint="Used for certificate expiry notifications"
-                        persistent-hint
-                      />
-                    </v-col>
-                  </v-row>
-
-                  <v-btn
-                    color="primary"
-                    class="mt-4"
-                    :loading="sslLoading"
-                    :disabled="!sslConfig.domain || !sslConfig.email"
-                    @click="enableSSL"
-                  >
-                    {{ sslConfig.enabled && sslConfig.cert_type === 'letsencrypt' ? 'Renew Certificate' : 'Enable HTTPS' }}
-                  </v-btn>
-                </v-form>
+                <v-btn
+                  color="primary"
+                  variant="tonal"
+                  size="small"
+                  :loading="sslLoading"
+                  :disabled="!sslConfig.domain || !sslConfig.email"
+                  @click="enableSSL"
+                >
+                  {{ sslConfig.enabled && sslConfig.cert_type === 'letsencrypt' ? 'Renew' : 'Enable HTTPS' }}
+                </v-btn>
               </v-window-item>
 
-              <!-- Manual Upload Tab -->
               <v-window-item value="manual">
-                <v-alert type="info" variant="tonal" density="compact" class="mb-4">
-                  Upload your own SSL certificate and private key (PEM format).
-                </v-alert>
-                <v-form>
-                  <v-row>
-                    <v-col cols="12" md="4">
-                      <v-text-field
-                        v-model="manualCert.domain"
-                        label="Domain Name"
-                        placeholder="audyn.example.com"
-                        hint="Domain the certificate is issued for"
-                        persistent-hint
-                      />
-                    </v-col>
-                    <v-col cols="12" md="4">
-                      <v-file-input
-                        v-model="manualCert.certFile"
-                        label="Certificate File"
-                        accept=".crt,.pem,.cer"
-                        prepend-icon="mdi-certificate"
-                        hint=".crt, .pem, or .cer file"
-                        persistent-hint
-                      />
-                    </v-col>
-                    <v-col cols="12" md="4">
-                      <v-file-input
-                        v-model="manualCert.keyFile"
-                        label="Private Key File"
-                        accept=".key,.pem"
-                        prepend-icon="mdi-key"
-                        hint=".key or .pem file"
-                        persistent-hint
-                      />
-                    </v-col>
-                  </v-row>
-
-                  <v-btn
-                    color="primary"
-                    class="mt-4"
-                    :loading="sslLoading"
-                    :disabled="!manualCert.domain || !manualCert.certFile || !manualCert.keyFile"
-                    @click="uploadCertificate"
-                  >
-                    Upload & Install Certificate
-                  </v-btn>
-                </v-form>
+                <v-row dense>
+                  <v-col cols="12">
+                    <v-text-field
+                      v-model="manualCert.domain"
+                      label="Domain Name"
+                      placeholder="audyn.example.com"
+                      variant="outlined"
+                      density="compact"
+                      class="mb-2"
+                    />
+                  </v-col>
+                  <v-col cols="12">
+                    <v-file-input
+                      v-model="manualCert.certFile"
+                      label="Certificate (.crt, .pem)"
+                      accept=".crt,.pem,.cer"
+                      prepend-icon=""
+                      prepend-inner-icon="mdi-certificate"
+                      variant="outlined"
+                      density="compact"
+                      class="mb-2"
+                    />
+                  </v-col>
+                  <v-col cols="12">
+                    <v-file-input
+                      v-model="manualCert.keyFile"
+                      label="Private Key (.key, .pem)"
+                      accept=".key,.pem"
+                      prepend-icon=""
+                      prepend-inner-icon="mdi-key"
+                      variant="outlined"
+                      density="compact"
+                    />
+                  </v-col>
+                </v-row>
+                <v-btn
+                  color="primary"
+                  variant="tonal"
+                  size="small"
+                  class="mt-3"
+                  :loading="sslLoading"
+                  :disabled="!manualCert.domain || !manualCert.certFile || !manualCert.keyFile"
+                  @click="uploadCertificate"
+                >
+                  Upload Certificate
+                </v-btn>
               </v-window-item>
             </v-window>
-
-            <v-divider class="my-4" v-if="sslConfig.enabled" />
 
             <v-btn
               v-if="sslConfig.enabled"
               color="error"
-              variant="outlined"
+              variant="text"
+              size="small"
+              class="mt-4"
               :loading="sslLoading"
               @click="disableSSL"
             >
@@ -276,21 +579,27 @@
           </v-card-text>
         </v-card>
       </v-col>
+    </v-row>
 
-      <!-- Authentication Settings -->
-      <v-col cols="12">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-shield-account" class="mr-2" />
-            Authentication Settings
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SECURITY SECTION -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
+      <v-icon icon="mdi-shield-lock" size="small" class="mr-2" />
+      Security & Authentication
+    </div>
+
+    <v-row class="mb-6">
+      <!-- Entra ID -->
+      <v-col cols="12" lg="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-microsoft" class="mr-2" color="blue" />
+            Microsoft Entra ID
           </v-card-title>
-          <v-card-text>
-            <v-row>
-              <!-- Entra ID Configuration -->
-              <v-col cols="12">
-                <div class="text-subtitle-2 text-medium-emphasis mb-2">Microsoft Entra ID (Azure AD)</div>
-              </v-col>
-              <v-col cols="12" md="6">
+          <v-card-text class="pt-4">
+            <v-row dense>
+              <v-col cols="12" sm="6">
                 <v-text-field
                   v-model="authConfig.entraTenantId"
                   label="Tenant ID"
@@ -299,16 +608,16 @@
                   density="compact"
                 />
               </v-col>
-              <v-col cols="12" md="6">
+              <v-col cols="12" sm="6">
                 <v-text-field
                   v-model="authConfig.entraClientId"
-                  label="Client ID (Application ID)"
+                  label="Client ID"
                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                   variant="outlined"
                   density="compact"
                 />
               </v-col>
-              <v-col cols="12" md="6">
+              <v-col cols="12" sm="6">
                 <v-text-field
                   v-model="authConfig.entraClientSecret"
                   label="Client Secret"
@@ -317,11 +626,11 @@
                   @click:append-inner="showClientSecret = !showClientSecret"
                   variant="outlined"
                   density="compact"
-                  hint="Leave empty to keep existing secret"
+                  hint="Leave empty to keep existing"
                   persistent-hint
                 />
               </v-col>
-              <v-col cols="12" md="6">
+              <v-col cols="12" sm="6">
                 <v-text-field
                   v-model="authConfig.entraRedirectUri"
                   label="Redirect URI"
@@ -330,29 +639,38 @@
                   density="compact"
                 />
               </v-col>
+            </v-row>
+          </v-card-text>
+        </v-card>
+      </v-col>
 
-              <!-- Breakglass Password -->
-              <v-col cols="12">
-                <v-divider class="my-4" />
-                <div class="text-subtitle-2 text-medium-emphasis mb-2">Emergency Access</div>
-              </v-col>
-              <v-col cols="12" md="6">
+      <!-- Breakglass -->
+      <v-col cols="12" lg="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-key-alert" class="mr-2" color="error" />
+            Emergency Access
+          </v-card-title>
+          <v-card-text class="pt-4">
+            <v-alert type="warning" variant="tonal" density="compact" class="mb-4">
+              Breakglass password provides admin access when Entra ID is unavailable.
+            </v-alert>
+            <v-row dense>
+              <v-col cols="12" sm="6">
                 <v-text-field
                   v-model="authConfig.breakglassPassword"
-                  label="Breakglass Password"
+                  label="New Breakglass Password"
                   :type="showBreakglass ? 'text' : 'password'"
                   :append-inner-icon="showBreakglass ? 'mdi-eye-off' : 'mdi-eye'"
                   @click:append-inner="showBreakglass = !showBreakglass"
                   variant="outlined"
                   density="compact"
-                  hint="Master password for emergency admin access when Entra ID is unavailable"
-                  persistent-hint
                 />
               </v-col>
-              <v-col cols="12" md="6">
+              <v-col cols="12" sm="6">
                 <v-text-field
                   v-model="authConfig.breakglassPasswordConfirm"
-                  label="Confirm Breakglass Password"
+                  label="Confirm Password"
                   :type="showBreakglass ? 'text' : 'password'"
                   variant="outlined"
                   density="compact"
@@ -363,60 +681,6 @@
             </v-row>
           </v-card-text>
         </v-card>
-      </v-col>
-
-      <!-- System Info -->
-      <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-information" class="mr-2" />
-            System Information
-          </v-card-title>
-          <v-card-text>
-            <v-list density="compact">
-              <v-list-item>
-                <v-list-item-title>Version</v-list-item-title>
-                <v-list-item-subtitle>Audyn v1.0.0</v-list-item-subtitle>
-              </v-list-item>
-              <v-list-item>
-                <v-list-item-title>Backend Status</v-list-item-title>
-                <v-list-item-subtitle>
-                  <v-chip color="success" size="small">Connected</v-chip>
-                </v-list-item-subtitle>
-              </v-list-item>
-              <v-list-item>
-                <v-list-item-title>Archive Stats</v-list-item-title>
-                <v-list-item-subtitle>
-                  {{ stats.totalFiles }} files, {{ stats.totalSize }}
-                </v-list-item-subtitle>
-              </v-list-item>
-            </v-list>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- Save Button -->
-    <v-row class="mt-4">
-      <v-col>
-        <v-btn
-          color="primary"
-          size="large"
-          prepend-icon="mdi-content-save"
-          :loading="saving"
-          @click="saveSettings"
-        >
-          Save Settings
-        </v-btn>
-
-        <v-btn
-          variant="outlined"
-          size="large"
-          class="ml-4"
-          @click="resetSettings"
-        >
-          Reset to Defaults
-        </v-btn>
       </v-col>
     </v-row>
   </v-container>
@@ -438,6 +702,28 @@ const stats = ref({
 
 // Network interfaces
 const interfaces = ref([])
+
+// Control interface network configuration
+const networkConfig = ref({
+  interface: null,
+  mode: 'dhcp',
+  ip_address: '',
+  netmask: '255.255.255.0',
+  gateway: '',
+  dns_servers: [],
+  bind_services: false
+})
+const networkSaving = ref(false)
+
+// AES67 interface network configuration
+const aes67Config = ref({
+  interface: null,
+  mode: 'dhcp',
+  ip_address: '',
+  netmask: '255.255.255.0',
+  gateway: ''
+})
+const aes67Saving = ref(false)
 
 // System configuration
 const systemConfig = ref({
@@ -620,6 +906,156 @@ async function fetchInterfaces() {
   }
 }
 
+async function fetchNetworkConfig() {
+  try {
+    const response = await fetch('/api/system/network')
+    if (response.ok) {
+      const data = await response.json()
+      networkConfig.value.interface = data.interface || null
+      networkConfig.value.bind_services = data.bind_services || false
+      if (data.network) {
+        networkConfig.value.mode = data.network.mode || 'dhcp'
+        networkConfig.value.ip_address = data.network.ip_address || ''
+        networkConfig.value.netmask = data.network.netmask || '255.255.255.0'
+        networkConfig.value.gateway = data.network.gateway || ''
+        networkConfig.value.dns_servers = data.network.dns_servers || []
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch network config:', err)
+  }
+}
+
+async function fetchAES67Config() {
+  try {
+    const response = await fetch('/api/system/aes67')
+    if (response.ok) {
+      const data = await response.json()
+      aes67Config.value.interface = data.interface || null
+      if (data.network) {
+        aes67Config.value.mode = data.network.mode || 'dhcp'
+        aes67Config.value.ip_address = data.network.ip_address || ''
+        aes67Config.value.netmask = data.network.netmask || '255.255.255.0'
+        aes67Config.value.gateway = data.network.gateway || ''
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch AES67 config:', err)
+  }
+}
+
+async function saveAES67Config() {
+  if (!aes67Config.value.interface) {
+    alert('Please select an AES67 interface')
+    return
+  }
+
+  // Validate static IP settings
+  if (aes67Config.value.mode === 'static') {
+    if (!aes67Config.value.ip_address) {
+      alert('IP address is required for static configuration')
+      return
+    }
+  }
+
+  aes67Saving.value = true
+  try {
+    const payload = {
+      interface: aes67Config.value.interface,
+      network: {
+        interface: aes67Config.value.interface,
+        mode: aes67Config.value.mode,
+        ip_address: aes67Config.value.mode === 'static' ? aes67Config.value.ip_address : null,
+        netmask: aes67Config.value.mode === 'static' ? aes67Config.value.netmask : null,
+        gateway: aes67Config.value.mode === 'static' ? aes67Config.value.gateway : null,
+        dns_servers: []
+      }
+    }
+
+    const response = await fetch('/api/system/aes67', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+
+    if (response.ok) {
+      alert('AES67 network configuration applied successfully!')
+      // Also update the global config aes67Interface for the recorder
+      config.value.aes67Interface = aes67Config.value.interface
+    } else {
+      const error = await response.json()
+      alert(`Failed to apply AES67 network configuration: ${error.detail || 'Unknown error'}`)
+    }
+  } catch (err) {
+    console.error('Failed to save AES67 config:', err)
+    alert('Failed to apply AES67 network configuration. Check console for details.')
+  } finally {
+    aes67Saving.value = false
+  }
+}
+
+async function saveNetworkConfig() {
+  if (!networkConfig.value.interface) {
+    alert('Please select a control interface')
+    return
+  }
+
+  // Validate static IP settings
+  if (networkConfig.value.mode === 'static') {
+    if (!networkConfig.value.ip_address) {
+      alert('IP address is required for static configuration')
+      return
+    }
+  }
+
+  networkSaving.value = true
+  try {
+    const payload = {
+      interface: networkConfig.value.interface,
+      bind_services: networkConfig.value.bind_services,
+      network: {
+        interface: networkConfig.value.interface,
+        mode: networkConfig.value.mode,
+        ip_address: networkConfig.value.mode === 'static' ? networkConfig.value.ip_address : null,
+        netmask: networkConfig.value.mode === 'static' ? networkConfig.value.netmask : null,
+        gateway: networkConfig.value.mode === 'static' ? networkConfig.value.gateway : null,
+        dns_servers: networkConfig.value.mode === 'static' ? networkConfig.value.dns_servers : []
+      }
+    }
+
+    const response = await fetch('/api/system/network', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      alert('Network configuration applied successfully!')
+
+      // If IP changed and bind_services is enabled, redirect to new IP
+      if (networkConfig.value.mode === 'static' &&
+          networkConfig.value.bind_services &&
+          networkConfig.value.ip_address) {
+        const protocol = window.location.protocol
+        const newUrl = `${protocol}//${networkConfig.value.ip_address}`
+        alert(`Redirecting to ${newUrl} in 5 seconds...`)
+        setTimeout(() => {
+          window.location.href = newUrl
+        }, 5000)
+      }
+    } else {
+      const error = await response.json()
+      alert(`Failed to apply network configuration: ${error.detail || 'Unknown error'}`)
+    }
+  } catch (err) {
+    console.error('Failed to save network config:', err)
+    alert('Failed to apply network configuration. Check console for details.')
+  } finally {
+    networkSaving.value = false
+  }
+}
+
 async function fetchTimezones() {
   try {
     const response = await fetch('/api/system/timezones')
@@ -780,6 +1216,8 @@ onMounted(async () => {
   fetchStats()
   fetchAuthConfig()
   fetchInterfaces()
+  fetchNetworkConfig()
+  fetchAES67Config()
   fetchTimezones()
   fetchSystemConfig()
   fetchSSLConfig()
