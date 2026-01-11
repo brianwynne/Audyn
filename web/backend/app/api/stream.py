@@ -31,6 +31,106 @@ GROWING_FILE_POLL_INTERVAL = 0.1  # 100ms polling for new data
 GROWING_FILE_TIMEOUT = 5.0  # Wait up to 5 seconds for new data before assuming file is complete
 STREAM_CHUNK_SIZE = 8192  # 8KB chunks for streaming
 
+# Ogg page header signature
+OGG_PAGE_SIGNATURE = b'OggS'
+OGG_HEADER_MIN_SIZE = 27  # Minimum Ogg page header size
+
+
+def find_complete_ogg_pages(data: bytes) -> tuple[bytes, bytes]:
+    """
+    Parse Ogg data and return (complete_pages, remainder).
+    Only returns data up to the last complete Ogg page boundary.
+    This ensures we never send partial/corrupted page data.
+    """
+    if len(data) < OGG_HEADER_MIN_SIZE:
+        return b'', data
+
+    complete_end = 0
+    pos = 0
+
+    while pos + OGG_HEADER_MIN_SIZE <= len(data):
+        # Check for OggS signature
+        if data[pos:pos+4] != OGG_PAGE_SIGNATURE:
+            # Not at a page boundary - might be corrupted or mid-page
+            # Try to find next page
+            next_ogg = data.find(OGG_PAGE_SIGNATURE, pos + 1)
+            if next_ogg == -1:
+                break
+            pos = next_ogg
+            continue
+
+        # Parse page header to get total page size
+        # Byte 26 is number of segments
+        if pos + 27 > len(data):
+            break
+
+        num_segments = data[pos + 26]
+
+        # Need segment table (num_segments bytes after header)
+        header_size = 27 + num_segments
+        if pos + header_size > len(data):
+            break
+
+        # Sum segment sizes to get body length
+        body_size = sum(data[pos + 27:pos + header_size])
+        total_page_size = header_size + body_size
+
+        if pos + total_page_size > len(data):
+            # Page extends beyond available data - incomplete
+            break
+
+        # Complete page found
+        complete_end = pos + total_page_size
+        pos = complete_end
+
+    return data[:complete_end], data[complete_end:]
+
+
+async def stream_growing_ogg_file(file_path: Path) -> AsyncGenerator[bytes, None]:
+    """
+    Stream a growing Ogg file, only sending complete pages.
+    This is critical for reliable playback of Ogg Opus files during recording.
+    """
+    last_position = 0
+    stall_start = None
+    buffer = b''
+
+    while True:
+        try:
+            current_size = file_path.stat().st_size
+        except FileNotFoundError:
+            logger.warning(f"File disappeared during streaming: {file_path}")
+            break
+
+        if current_size > last_position:
+            stall_start = None
+
+            with open(file_path, 'rb') as f:
+                f.seek(last_position)
+                new_data = f.read(current_size - last_position)
+                last_position = current_size
+
+            # Combine with any buffered partial page
+            buffer += new_data
+
+            # Extract complete pages
+            complete, buffer = find_complete_ogg_pages(buffer)
+
+            if complete:
+                yield complete
+
+        else:
+            if stall_start is None:
+                stall_start = time.time()
+            elif time.time() - stall_start > GROWING_FILE_TIMEOUT:
+                # Send any remaining buffer (file is complete)
+                if buffer:
+                    yield buffer
+                logger.debug(f"Ogg stream complete: {file_path}")
+                break
+
+            await asyncio.sleep(GROWING_FILE_POLL_INTERVAL)
+
 
 async def stream_growing_file(file_path: Path) -> AsyncGenerator[bytes, None]:
     """
@@ -95,15 +195,28 @@ async def transcode_growing_file(
     # Build FFmpeg command for growing file support
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
 
+    ext = file_path.suffix.lower()
+
     # Input options for growing files
     if follow:
-        # Use -re for real-time reading (helps with growing files)
-        # and -f to specify input format hint based on extension
-        ext = file_path.suffix.lower()
+        # Options to handle incomplete/growing files:
+        # - genpts: generate timestamps if missing
+        # - igndts: ignore DTS errors
+        # - discardcorrupt: skip corrupted frames
+        cmd.extend(["-fflags", "+genpts+igndts+discardcorrupt"])
+
+        # Reduce probing to start faster on growing files
+        # Don't wait too long trying to analyze the stream
+        cmd.extend(["-probesize", "32768"])  # 32KB probe
+        cmd.extend(["-analyzeduration", "500000"])  # 0.5 seconds
+
+        # Specify input format hint based on extension
         if ext == '.wav':
             cmd.extend(["-f", "wav"])
         elif ext in ['.opus', '.ogg']:
             cmd.extend(["-f", "ogg"])
+            # For Ogg: be lenient with missing EOS
+            cmd.extend(["-err_detect", "ignore_err"])
 
         # Allow FFmpeg to wait for more data
         cmd.extend(["-thread_queue_size", "512"])
@@ -285,8 +398,18 @@ async def stream_raw(
     }
     media_type = mime_types.get(ext, 'application/octet-stream')
 
+    # Choose appropriate streaming method
+    if follow:
+        # Use Ogg-aware streaming for Ogg/Opus files to ensure complete pages
+        if ext in ['.ogg', '.opus']:
+            generator = stream_growing_ogg_file(full_path)
+        else:
+            generator = stream_growing_file(full_path)
+    else:
+        generator = open(full_path, 'rb')
+
     return StreamingResponse(
-        stream_growing_file(full_path) if follow else open(full_path, 'rb'),
+        generator,
         media_type=media_type,
         headers={
             "Transfer-Encoding": "chunked",
