@@ -57,7 +57,7 @@ const routes = [
     path: '/sources',
     name: 'sources',
     component: () => import('@/views/Sources.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, title: 'Sources' }
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'AES67 Sources' }
   },
   {
     path: '/files',

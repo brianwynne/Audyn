@@ -1,7 +1,20 @@
 <template>
   <v-container fluid class="pa-6">
     <div class="d-flex justify-space-between align-center mb-6">
-      <h1 class="text-h4">Archive Files</h1>
+      <div class="d-flex align-center gap-4">
+        <h1 class="text-h4">Archive Files</h1>
+
+        <!-- Delete Selected Button -->
+        <v-btn
+          v-if="selectedFiles.length > 0"
+          color="error"
+          variant="tonal"
+          prepend-icon="mdi-delete"
+          @click="confirmBulkDelete"
+        >
+          Delete {{ selectedFiles.length }} Selected
+        </v-btn>
+      </div>
 
       <div class="d-flex gap-2 align-center">
         <!-- Studio filter -->
@@ -63,9 +76,12 @@
     <!-- Files Table -->
     <v-card>
       <v-data-table
+        v-model="selectedFiles"
         :headers="headers"
         :items="filteredFiles"
         :items-per-page="25"
+        item-value="path"
+        show-select
         hover
       >
         <template v-slot:item.name="{ item }">
@@ -146,17 +162,41 @@
     </v-card>
 
     <!-- Delete Confirmation -->
-    <v-dialog v-model="deleteDialog.show" max-width="400">
+    <v-dialog v-model="deleteDialog.show" max-width="500">
       <v-card>
-        <v-card-title>Delete File</v-card-title>
+        <v-card-title>
+          {{ deleteDialog.bulk ? 'Delete Multiple Files' : 'Delete File' }}
+        </v-card-title>
         <v-card-text>
-          Are you sure you want to delete "{{ deleteDialog.file?.name }}"?
-          This action cannot be undone.
+          <template v-if="deleteDialog.bulk">
+            <p class="mb-2">Are you sure you want to delete {{ deleteDialog.files.length }} files?</p>
+            <v-list density="compact" max-height="200" class="overflow-y-auto">
+              <v-list-item v-for="file in deleteDialog.files" :key="file.path" density="compact">
+                <template v-slot:prepend>
+                  <v-icon size="small" :color="getFileColor(file.format)">
+                    {{ getFileIcon(file.format) }}
+                  </v-icon>
+                </template>
+                <v-list-item-title class="text-body-2">{{ file.name }}</v-list-item-title>
+              </v-list-item>
+            </v-list>
+            <p class="mt-2 text-error">This action cannot be undone.</p>
+          </template>
+          <template v-else>
+            Are you sure you want to delete "{{ deleteDialog.file?.name }}"?
+            This action cannot be undone.
+          </template>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="deleteDialog.show = false">Cancel</v-btn>
-          <v-btn color="error" @click="deleteFile">Delete</v-btn>
+          <v-btn
+            color="error"
+            :loading="deleteDialog.loading"
+            @click="deleteDialog.bulk ? deleteBulkFiles() : deleteFile()"
+          >
+            Delete{{ deleteDialog.bulk ? ` ${deleteDialog.files.length} Files` : '' }}
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -186,11 +226,15 @@ const currentDir = ref({
 })
 const search = ref('')
 const selectedFile = ref(null)
+const selectedFiles = ref([])  // Selected file paths for bulk operations
 const selectedStudioId = ref(null)
 const selectedRecorderId = ref(null)
 const deleteDialog = ref({
   show: false,
-  file: null
+  file: null,
+  files: [],
+  bulk: false,
+  loading: false
 })
 
 // Studio options for filter
@@ -409,11 +453,27 @@ function previewFile(file) {
 function confirmDelete(file) {
   deleteDialog.value = {
     show: true,
-    file
+    file,
+    files: [],
+    bulk: false,
+    loading: false
+  }
+}
+
+function confirmBulkDelete() {
+  // Find the actual file objects from the selected paths
+  const filesToDelete = allFiles.value.filter(f => selectedFiles.value.includes(f.path))
+  deleteDialog.value = {
+    show: true,
+    file: null,
+    files: filesToDelete,
+    bulk: true,
+    loading: false
   }
 }
 
 async function deleteFile() {
+  deleteDialog.value.loading = true
   try {
     const response = await fetch(`/api/assets/file/${deleteDialog.value.file.path}`, {
       method: 'DELETE'
@@ -429,6 +489,39 @@ async function deleteFile() {
     console.error('Failed to delete file:', err)
   } finally {
     deleteDialog.value.show = false
+    deleteDialog.value.loading = false
+  }
+}
+
+async function deleteBulkFiles() {
+  deleteDialog.value.loading = true
+  try {
+    const paths = deleteDialog.value.files.map(f => f.path)
+    const response = await fetch('/api/assets/delete-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths })
+    })
+
+    if (response.ok) {
+      const result = await response.json()
+      console.log(`Deleted ${result.deleted.length} files`, result)
+
+      // Clear selection
+      selectedFiles.value = []
+
+      // Clear preview if deleted
+      if (selectedFile.value && paths.includes(selectedFile.value.path)) {
+        selectedFile.value = null
+      }
+
+      await fetchFiles()
+    }
+  } catch (err) {
+    console.error('Failed to delete files:', err)
+  } finally {
+    deleteDialog.value.show = false
+    deleteDialog.value.loading = false
   }
 }
 

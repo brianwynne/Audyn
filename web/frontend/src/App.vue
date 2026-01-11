@@ -99,7 +99,7 @@
           />
           <v-list-item
             prepend-icon="mdi-access-point-network"
-            title="Sources"
+            title="AES67 Sources"
             value="sources"
             :to="{ name: 'sources' }"
           />

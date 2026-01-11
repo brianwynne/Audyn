@@ -131,7 +131,7 @@
         <v-card color="info" variant="tonal">
           <v-card-text class="text-center">
             <div class="text-h4">{{ captureStore.sources.length }}</div>
-            <div class="text-caption">Sources</div>
+            <div class="text-caption">AES67 Sources</div>
           </v-card-text>
         </v-card>
       </v-col>

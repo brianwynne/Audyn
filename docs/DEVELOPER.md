@@ -111,6 +111,8 @@ Audyn/
 │   │   │   ├── auth/           # Authentication
 │   │   │   ├── api/            # REST API endpoints
 │   │   │   ├── services/       # Business logic
+│   │   │   │   ├── audyn.py    # Audyn process management
+│   │   │   │   └── config_store.py  # Config persistence
 │   │   │   └── websocket/      # WebSocket handlers
 │   │   └── requirements.txt
 │   │

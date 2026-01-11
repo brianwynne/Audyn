@@ -18,13 +18,34 @@ import logging
 import mimetypes
 
 from ..auth.entra import get_current_user, User
+from ..services.config_store import load_global_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Archive root directory
-ARCHIVE_ROOT = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn")
+# Default archive root - can be overridden by persisted config or env var
+_DEFAULT_ARCHIVE_ROOT = os.path.expanduser("~/audyn-archive")
+
+
+def get_archive_root() -> str:
+    """Get the archive root from persisted config, env var, or default."""
+    # First check env var (allows override for testing)
+    env_root = os.getenv("AUDYN_ARCHIVE_ROOT")
+    if env_root:
+        return env_root
+
+    # Then check persisted global config
+    config = load_global_config()
+    if config and config.get("archive_root"):
+        return config["archive_root"]
+
+    # Fall back to default
+    return _DEFAULT_ARCHIVE_ROOT
+
+
+# For backwards compatibility - but functions should use get_archive_root()
+ARCHIVE_ROOT = get_archive_root()
 
 
 class AudioFile(BaseModel):
@@ -269,6 +290,54 @@ async def delete_file(
     logger.info(f"File deleted: {file_path} by {user.email}")
 
     return {"message": "File deleted", "path": file_path}
+
+
+class BulkDeleteRequest(BaseModel):
+    """Request to delete multiple files."""
+    paths: list[str]
+
+
+@router.post("/delete-bulk")
+async def delete_files_bulk(
+    request: BulkDeleteRequest,
+    user: User = Depends(get_current_user)
+):
+    """Delete multiple audio files at once."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required for bulk delete")
+
+    deleted = []
+    errors = []
+
+    for file_path in request.paths:
+        full_path = Path(ARCHIVE_ROOT) / file_path
+
+        try:
+            full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+        except ValueError:
+            errors.append({"path": file_path, "error": "Access denied"})
+            continue
+
+        if not full_path.exists():
+            errors.append({"path": file_path, "error": "File not found"})
+            continue
+
+        if not full_path.is_file():
+            errors.append({"path": file_path, "error": "Not a file"})
+            continue
+
+        try:
+            full_path.unlink()
+            deleted.append(file_path)
+            logger.info(f"File deleted: {file_path} by {user.email}")
+        except Exception as e:
+            errors.append({"path": file_path, "error": str(e)})
+
+    return {
+        "message": f"Deleted {len(deleted)} files",
+        "deleted": deleted,
+        "errors": errors
+    }
 
 
 @router.get("/stats")

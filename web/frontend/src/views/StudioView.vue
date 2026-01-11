@@ -31,9 +31,48 @@
       <!-- Recorders Panel -->
       <v-col cols="12" md="4">
         <v-card class="mb-4">
-          <v-card-title class="d-flex align-center">
-            <v-icon icon="mdi-record-circle" class="mr-2" />
-            Recorders
+          <v-card-title class="d-flex align-center justify-space-between">
+            <div class="d-flex align-center">
+              <v-icon icon="mdi-record-circle" class="mr-2" />
+              Recorders
+            </div>
+            <!-- Record/Stop All Buttons -->
+            <div v-if="studioRecorders.length > 0">
+              <v-btn
+                v-if="allRecording"
+                color="error"
+                size="small"
+                variant="tonal"
+                :loading="recordersStore.loading"
+                @click="stopAllStudioRecorders"
+              >
+                <v-icon start size="small">mdi-stop</v-icon>
+                Stop All
+              </v-btn>
+              <v-btn
+                v-else-if="anyRecording"
+                color="warning"
+                size="small"
+                variant="tonal"
+                :loading="recordersStore.loading"
+                @click="stopAllStudioRecorders"
+              >
+                <v-icon start size="small">mdi-stop</v-icon>
+                Stop All
+              </v-btn>
+              <v-btn
+                v-if="!allRecording"
+                color="success"
+                size="small"
+                variant="tonal"
+                class="ml-2"
+                :loading="recordersStore.loading"
+                @click="recordAllStudioRecorders"
+              >
+                <v-icon start size="small">mdi-record</v-icon>
+                Record All
+              </v-btn>
+            </div>
           </v-card-title>
           <v-card-text>
             <div v-if="studioRecorders.length === 0" class="text-center py-4 text-medium-emphasis">
@@ -59,7 +98,32 @@
                   </v-avatar>
                 </template>
 
-                <v-list-item-title>{{ recorder.name }}</v-list-item-title>
+                <v-list-item-title class="d-flex align-center justify-space-between">
+                  <span>{{ recorder.name }}</span>
+                  <!-- Record/Stop Button -->
+                  <v-btn
+                    v-if="recorder.state === 'recording'"
+                    color="error"
+                    size="small"
+                    variant="flat"
+                    :loading="recordersStore.loading"
+                    @click.stop="stopRecorder(recorder.id)"
+                  >
+                    <v-icon start size="small">mdi-stop</v-icon>
+                    Stop
+                  </v-btn>
+                  <v-btn
+                    v-else
+                    color="success"
+                    size="small"
+                    variant="flat"
+                    :loading="recordersStore.loading"
+                    @click.stop="startRecorder(recorder.id)"
+                  >
+                    <v-icon start size="small">mdi-record</v-icon>
+                    Record
+                  </v-btn>
+                </v-list-item-title>
                 <v-list-item-subtitle>
                   <v-chip
                     :color="recorder.state === 'recording' ? 'error' : 'grey'"
@@ -255,6 +319,17 @@ const studioRecorders = computed(() =>
   recordersStore.recorders.filter(r => r.studio_id === route.params.id)
 )
 
+// Check if all studio recorders are recording
+const allRecording = computed(() =>
+  studioRecorders.value.length > 0 &&
+  studioRecorders.value.every(r => r.state === 'recording')
+)
+
+// Check if any studio recorders are recording
+const anyRecording = computed(() =>
+  studioRecorders.value.some(r => r.state === 'recording')
+)
+
 // Get other studios (excluding current)
 const otherStudios = computed(() =>
   studiosStore.studios.filter(s => s.id !== route.params.id)
@@ -321,6 +396,33 @@ function switchStudio() {
   router.push({ name: 'studio-select' })
 }
 
+// Recorder control methods
+async function startRecorder(recorderId) {
+  await recordersStore.startRecorder(recorderId)
+}
+
+async function stopRecorder(recorderId) {
+  await recordersStore.stopRecorder(recorderId)
+}
+
+async function recordAllStudioRecorders() {
+  // Start all stopped recorders for this studio
+  for (const recorder of studioRecorders.value) {
+    if (recorder.state !== 'recording') {
+      await recordersStore.startRecorder(recorder.id)
+    }
+  }
+}
+
+async function stopAllStudioRecorders() {
+  // Stop all recording recorders for this studio
+  for (const recorder of studioRecorders.value) {
+    if (recorder.state === 'recording') {
+      await recordersStore.stopRecorder(recorder.id)
+    }
+  }
+}
+
 async function fetchFiles() {
   loadingFiles.value = true
 
@@ -354,6 +456,47 @@ watch(() => route.params.id, async (newId) => {
   }
 })
 
+// File polling for real-time updates when recording
+let filePollingInterval = null
+
+function startFilePolling() {
+  if (filePollingInterval) return
+
+  // Poll every 3 seconds while recording
+  filePollingInterval = setInterval(async () => {
+    if (anyRecording.value) {
+      // Only fetch current studio files (not other studios) for performance
+      try {
+        const response = await fetch(`/api/assets/browse?studio_id=${route.params.id}`)
+        if (response.ok) {
+          const data = await response.json()
+          myStudioFiles.value = data.files || []
+        }
+      } catch (err) {
+        console.error('Failed to refresh files:', err)
+      }
+    }
+  }, 3000)
+}
+
+function stopFilePolling() {
+  if (filePollingInterval) {
+    clearInterval(filePollingInterval)
+    filePollingInterval = null
+  }
+}
+
+// Watch recording state to start/stop polling
+watch(anyRecording, (isRecording) => {
+  if (isRecording) {
+    startFilePolling()
+  } else {
+    stopFilePolling()
+    // Do one final refresh when recording stops
+    fetchFiles()
+  }
+})
+
 onMounted(async () => {
   await studiosStore.fetchStudios()
   await recordersStore.fetchRecorders()
@@ -362,9 +505,16 @@ onMounted(async () => {
 
   // Update selected studio in auth store
   authStore.setSelectedStudio(route.params.id)
+
+  // Start polling if already recording
+  if (anyRecording.value) {
+    startFilePolling()
+  }
 })
 
 onUnmounted(() => {
+  // Clean up file polling
+  stopFilePolling()
   // Don't disconnect levels as other components may use them
 })
 </script>

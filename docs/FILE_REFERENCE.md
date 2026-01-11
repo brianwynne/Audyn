@@ -473,6 +473,43 @@ typedef struct audyn_opus_cfg {
 
 ---
 
+### web/backend/app/services/config_store.py
+
+**Purpose:** File-based configuration persistence service.
+
+**Key Concepts:**
+- All configuration stored in `~/.config/audyn/`
+- Thread-safe file operations with `fcntl` locking
+- Atomic writes via temp file + rename
+- JSON format for human readability
+
+**Configuration Files:**
+| File | Description |
+|------|-------------|
+| `global.json` | Archive settings, PTP config |
+| `recorders.json` | Recorder configs, studio assignments |
+| `studios.json` | Studio definitions |
+| `sources.json` | AES67 source configurations |
+| `auth.json` | Auth settings (excluding secrets) |
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `ConfigStore.load()` | Load config file by name |
+| `ConfigStore.save()` | Save config with atomic write |
+| `load_global_config()` | Load global settings |
+| `save_global_config()` | Save global settings |
+| `load_recorders_config()` | Load recorder configs |
+| `save_recorders_config()` | Save recorder configs |
+| `load_studios_config()` | Load studio definitions |
+| `save_studios_config()` | Save studio definitions |
+| `load_sources_config()` | Load source configurations |
+| `save_sources_config()` | Save source configurations |
+| `load_auth_config()` | Load auth settings |
+| `save_auth_config()` | Save auth settings |
+
+---
+
 ### web/backend/app/websocket/levels.py
 
 **Purpose:** Real-time audio level streaming via WebSocket.
@@ -703,6 +740,105 @@ typedef struct audyn_opus_cfg {
 |---------|-------------|
 | backend | FastAPI application |
 | frontend | Nginx serving Vue build |
+
+---
+
+## User Configuration Files
+
+Configuration files stored in `~/.config/audyn/`.
+
+### global.json
+
+**Purpose:** Global capture and archive settings.
+
+**Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `archive_root` | string | Root directory for recordings |
+| `source_type` | string | Input type: `aes67` or `pipewire` |
+| `format` | string | Output format: `wav` or `opus` |
+| `bitrate` | number | Opus bitrate in bps |
+| `sample_rate` | number | Audio sample rate in Hz |
+| `channels` | number | Channel count (1 or 2) |
+| `archive_layout` | string | File naming layout |
+| `archive_period` | number | Rotation period in seconds |
+| `archive_clock` | string | Clock source for timestamps |
+
+---
+
+### recorders.json
+
+**Purpose:** Multi-recorder instance configurations.
+
+**Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `active_count` | number | Number of active recorders (1-6) |
+| `recorders` | object | Map of recorder ID to configuration |
+
+**Recorder Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Recorder display name |
+| `enabled` | boolean | Whether recorder is enabled |
+| `studio_id` | string | Assigned studio ID |
+| `multicast_addr` | string | AES67 multicast address |
+| `port` | number | UDP port number |
+| `archive_path` | string | Recording output directory |
+
+---
+
+### studios.json
+
+**Purpose:** Studio definitions and recorder assignments.
+
+**Studio Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Studio display name |
+| `description` | string | Optional description |
+| `color` | string | Hex color code for UI |
+| `enabled` | boolean | Whether studio is active |
+| `recorder_id` | number | Assigned recorder ID |
+
+---
+
+### sources.json
+
+**Purpose:** AES67 audio source configurations.
+
+**Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `active_source_id` | string | Currently selected source |
+| `sources` | object | Map of source ID to configuration |
+
+**Source Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Source identifier |
+| `name` | string | Source display name |
+| `multicast_addr` | string | Multicast IP address |
+| `port` | number | UDP port (default: 5004) |
+| `sample_rate` | number | Sample rate in Hz |
+| `channels` | number | Channel count |
+| `enabled` | boolean | Whether source is enabled |
+
+---
+
+### auth.json
+
+**Purpose:** Authentication configuration (excluding secrets).
+
+**Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `entra_tenant_id` | string | Azure AD tenant ID |
+| `entra_client_id` | string | Azure AD client ID |
+| `entra_redirect_uri` | string | OAuth redirect URL |
+| `breakglass_password_hash` | string | Bcrypt hash of emergency password |
+
+**Security:** Client secrets are NOT stored in this file - they must be provided via environment variables.
 
 ---
 

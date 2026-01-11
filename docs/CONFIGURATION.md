@@ -325,6 +325,125 @@ For production, update `allow_origins` to your actual domain.
 
 ---
 
+## Persisted Configuration Files
+
+The web application stores all configuration settings in JSON files located in `~/.config/audyn/`. These files are automatically created and updated as you configure the system through the web interface.
+
+### Configuration Directory
+
+```
+~/.config/audyn/
+├── global.json      # Archive and capture settings
+├── recorders.json   # Recorder instances and assignments
+├── studios.json     # Studio definitions
+├── sources.json     # AES67 source configurations
+└── auth.json        # Authentication settings (excl. secrets)
+```
+
+### global.json
+
+Stores global capture configuration settings.
+
+```json
+{
+  "archive_root": "/home/user/audyn-archive",
+  "source_type": "aes67",
+  "format": "opus",
+  "bitrate": 128000,
+  "sample_rate": 48000,
+  "channels": 2,
+  "archive_layout": "dailydir",
+  "archive_period": 3600,
+  "archive_clock": "localtime"
+}
+```
+
+### recorders.json
+
+Stores recorder instance configurations and studio assignments.
+
+```json
+{
+  "active_count": 6,
+  "recorders": {
+    "1": {
+      "name": "Recorder 1",
+      "enabled": true,
+      "studio_id": "studio-a",
+      "multicast_addr": "239.69.1.1",
+      "port": 5004,
+      "archive_path": "/home/user/audyn-archive/studio-a"
+    }
+  }
+}
+```
+
+### studios.json
+
+Stores studio definitions and their properties.
+
+```json
+{
+  "studios": {
+    "studio-a": {
+      "name": "Studio A",
+      "description": "Main broadcast studio",
+      "color": "#F44336",
+      "enabled": true,
+      "recorder_id": 1
+    }
+  }
+}
+```
+
+### sources.json
+
+Stores AES67 source configurations.
+
+```json
+{
+  "active_source_id": "default",
+  "sources": {
+    "default": {
+      "id": "default",
+      "name": "Default AES67",
+      "multicast_addr": "239.69.1.1",
+      "port": 5004,
+      "sample_rate": 48000,
+      "channels": 2,
+      "enabled": true
+    }
+  }
+}
+```
+
+### auth.json
+
+Stores authentication configuration (excluding secrets).
+
+```json
+{
+  "entra_tenant_id": "your-tenant-id",
+  "entra_client_id": "your-client-id",
+  "entra_redirect_uri": "http://localhost:8000/auth/callback",
+  "breakglass_password_hash": "$2b$12$..."
+}
+```
+
+**Security Note:** The `auth.json` file stores bcrypt-hashed passwords, not plaintext. Client secrets should remain in environment variables.
+
+### Configuration Precedence
+
+Settings are loaded in this order (later values override earlier):
+
+1. **Defaults** - Built-in application defaults
+2. **Persisted Config** - Values from `~/.config/audyn/` files
+3. **Environment Variables** - `AUDYN_*` and `ENTRA_*` variables
+
+This allows environment variables to override persisted settings for testing or deployment flexibility.
+
+---
+
 ## Environment Variables
 
 ### Core Engine

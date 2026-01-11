@@ -3,67 +3,6 @@
     <h1 class="text-h4 mb-6">Settings</h1>
 
     <v-row>
-      <!-- Capture Settings -->
-      <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title>
-            <v-icon icon="mdi-record-circle" class="mr-2" />
-            Capture Settings
-          </v-card-title>
-          <v-card-text>
-            <v-form>
-              <v-select
-                v-model="config.sourceType"
-                label="Source Type"
-                :items="[
-                  { title: 'AES67 (Network)', value: 'aes67' },
-                  { title: 'PipeWire (Local)', value: 'pipewire' }
-                ]"
-                item-title="title"
-                item-value="value"
-              />
-
-              <v-row>
-                <v-col cols="6">
-                  <v-select
-                    v-model="config.sampleRate"
-                    label="Sample Rate"
-                    :items="[44100, 48000, 96000]"
-                    suffix="Hz"
-                  />
-                </v-col>
-                <v-col cols="6">
-                  <v-select
-                    v-model="config.channels"
-                    label="Channels"
-                    :items="[1, 2, 4, 6, 8]"
-                  />
-                </v-col>
-              </v-row>
-
-              <v-select
-                v-model="config.format"
-                label="Output Format"
-                :items="[
-                  { title: 'WAV (Uncompressed)', value: 'wav' },
-                  { title: 'Opus (Compressed)', value: 'opus' }
-                ]"
-                item-title="title"
-                item-value="value"
-              />
-
-              <v-text-field
-                v-if="config.format === 'opus'"
-                v-model.number="config.bitrate"
-                label="Opus Bitrate"
-                type="number"
-                suffix="bps"
-              />
-            </v-form>
-          </v-card-text>
-        </v-card>
-      </v-col>
-
       <!-- Archive Settings -->
       <v-col cols="12" md="6">
         <v-card>
@@ -129,6 +68,94 @@
                 persistent-hint
               />
             </v-form>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <!-- Authentication Settings -->
+      <v-col cols="12">
+        <v-card>
+          <v-card-title>
+            <v-icon icon="mdi-shield-account" class="mr-2" />
+            Authentication Settings
+          </v-card-title>
+          <v-card-text>
+            <v-row>
+              <!-- Entra ID Configuration -->
+              <v-col cols="12">
+                <div class="text-subtitle-2 text-medium-emphasis mb-2">Microsoft Entra ID (Azure AD)</div>
+              </v-col>
+              <v-col cols="12" md="6">
+                <v-text-field
+                  v-model="authConfig.entraTenantId"
+                  label="Tenant ID"
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  variant="outlined"
+                  density="compact"
+                />
+              </v-col>
+              <v-col cols="12" md="6">
+                <v-text-field
+                  v-model="authConfig.entraClientId"
+                  label="Client ID (Application ID)"
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  variant="outlined"
+                  density="compact"
+                />
+              </v-col>
+              <v-col cols="12" md="6">
+                <v-text-field
+                  v-model="authConfig.entraClientSecret"
+                  label="Client Secret"
+                  :type="showClientSecret ? 'text' : 'password'"
+                  :append-inner-icon="showClientSecret ? 'mdi-eye-off' : 'mdi-eye'"
+                  @click:append-inner="showClientSecret = !showClientSecret"
+                  variant="outlined"
+                  density="compact"
+                  hint="Leave empty to keep existing secret"
+                  persistent-hint
+                />
+              </v-col>
+              <v-col cols="12" md="6">
+                <v-text-field
+                  v-model="authConfig.entraRedirectUri"
+                  label="Redirect URI"
+                  placeholder="https://your-domain.com/auth/callback"
+                  variant="outlined"
+                  density="compact"
+                />
+              </v-col>
+
+              <!-- Breakglass Password -->
+              <v-col cols="12">
+                <v-divider class="my-4" />
+                <div class="text-subtitle-2 text-medium-emphasis mb-2">Emergency Access</div>
+              </v-col>
+              <v-col cols="12" md="6">
+                <v-text-field
+                  v-model="authConfig.breakglassPassword"
+                  label="Breakglass Password"
+                  :type="showBreakglass ? 'text' : 'password'"
+                  :append-inner-icon="showBreakglass ? 'mdi-eye-off' : 'mdi-eye'"
+                  @click:append-inner="showBreakglass = !showBreakglass"
+                  variant="outlined"
+                  density="compact"
+                  hint="Master password for emergency admin access when Entra ID is unavailable"
+                  persistent-hint
+                />
+              </v-col>
+              <v-col cols="12" md="6">
+                <v-text-field
+                  v-model="authConfig.breakglassPasswordConfirm"
+                  label="Confirm Breakglass Password"
+                  :type="showBreakglass ? 'text' : 'password'"
+                  variant="outlined"
+                  density="compact"
+                  :error="authConfig.breakglassPassword !== authConfig.breakglassPasswordConfirm && authConfig.breakglassPasswordConfirm !== ''"
+                  :error-messages="authConfig.breakglassPassword !== authConfig.breakglassPasswordConfirm && authConfig.breakglassPasswordConfirm !== '' ? 'Passwords do not match' : ''"
+                />
+              </v-col>
+            </v-row>
           </v-card-text>
         </v-card>
       </v-col>
@@ -204,6 +231,20 @@ const stats = ref({
   totalSize: '0 GB'
 })
 
+// Authentication config
+const authConfig = ref({
+  entraTenantId: '',
+  entraClientId: '',
+  entraClientSecret: '',
+  entraRedirectUri: '',
+  breakglassPassword: '',
+  breakglassPasswordConfirm: ''
+})
+
+// Password visibility toggles
+const showClientSecret = ref(false)
+const showBreakglass = ref(false)
+
 // Layout options
 const layouts = [
   { title: 'Flat (YYYY-MM-DD-HH.ext)', value: 'flat' },
@@ -221,18 +262,11 @@ async function saveSettings() {
     // Update the store
     captureStore.config = { ...config.value }
 
-    // Optionally save to backend
+    // Save archive/PTP config to backend
     await fetch('/api/control/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        source_type: config.value.sourceType,
-        multicast_addr: config.value.multicastAddr,
-        port: config.value.port,
-        sample_rate: config.value.sampleRate,
-        channels: config.value.channels,
-        format: config.value.format,
-        bitrate: config.value.bitrate,
         archive_root: config.value.archiveRoot,
         archive_layout: config.value.archiveLayout,
         archive_period: config.value.archivePeriod,
@@ -240,6 +274,34 @@ async function saveSettings() {
         ptp_interface: config.value.ptpInterface
       })
     })
+
+    // Save auth config if any fields are set
+    if (authConfig.value.entraTenantId || authConfig.value.entraClientId ||
+        authConfig.value.breakglassPassword) {
+      // Validate breakglass password match
+      if (authConfig.value.breakglassPassword &&
+          authConfig.value.breakglassPassword !== authConfig.value.breakglassPasswordConfirm) {
+        alert('Breakglass passwords do not match')
+        return
+      }
+
+      await fetch('/auth/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entra_tenant_id: authConfig.value.entraTenantId || undefined,
+          entra_client_id: authConfig.value.entraClientId || undefined,
+          entra_client_secret: authConfig.value.entraClientSecret || undefined,
+          entra_redirect_uri: authConfig.value.entraRedirectUri || undefined,
+          breakglass_password: authConfig.value.breakglassPassword || undefined
+        })
+      })
+
+      // Clear password fields after save
+      authConfig.value.entraClientSecret = ''
+      authConfig.value.breakglassPassword = ''
+      authConfig.value.breakglassPasswordConfirm = ''
+    }
   } finally {
     saving.value = false
   }
@@ -247,13 +309,6 @@ async function saveSettings() {
 
 function resetSettings() {
   config.value = {
-    sourceType: 'aes67',
-    multicastAddr: '239.69.1.1',
-    port: 5004,
-    sampleRate: 48000,
-    channels: 2,
-    format: 'wav',
-    bitrate: 128000,
     archiveRoot: '/var/lib/audyn',
     archiveLayout: 'dailydir',
     archivePeriod: 3600,
@@ -277,8 +332,26 @@ async function fetchStats() {
   }
 }
 
-onMounted(() => {
+async function fetchAuthConfig() {
+  try {
+    const response = await fetch('/auth/config')
+    if (response.ok) {
+      const data = await response.json()
+      authConfig.value.entraTenantId = data.entra_tenant_id || ''
+      authConfig.value.entraClientId = data.entra_client_id || ''
+      authConfig.value.entraRedirectUri = data.entra_redirect_uri || ''
+      // Don't populate secrets - they should be re-entered
+    }
+  } catch (err) {
+    console.error('Failed to fetch auth config:', err)
+  }
+}
+
+onMounted(async () => {
+  // Fetch config from backend first, then copy to local state
+  await captureStore.fetchConfig()
   config.value = { ...captureStore.config }
   fetchStats()
+  fetchAuthConfig()
 })
 </script>

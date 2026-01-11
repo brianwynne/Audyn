@@ -15,7 +15,8 @@ import uuid
 
 from ..auth.entra import get_current_user
 from ..models import Studio, User
-from .recorders import _recorders, get_recorder
+from .recorders import _recorders, get_recorder, _save_recorders
+from ..services.config_store import load_studios_config, save_studios_config
 
 logger = logging.getLogger(__name__)
 
@@ -42,48 +43,90 @@ class AssignRecorder(BaseModel):
     recorder_id: Optional[int] = None  # None to unassign
 
 
-# In-memory studio storage
-_studios: dict[str, Studio] = {
-    "studio-a": Studio(
-        id="studio-a",
-        name="Studio A",
-        description="Main broadcast studio",
-        color="#F44336",
-        recorder_id=1
-    ),
-    "studio-b": Studio(
-        id="studio-b",
-        name="Studio B",
-        description="Secondary studio",
-        color="#4CAF50",
-        recorder_id=2
-    ),
-    "studio-c": Studio(
-        id="studio-c",
-        name="Studio C",
-        description="Production studio",
-        color="#2196F3",
-        recorder_id=3
-    ),
-    "studio-d": Studio(
-        id="studio-d",
-        name="Studio D",
-        description="Edit suite",
-        color="#FF9800"
-    ),
-    "studio-e": Studio(
-        id="studio-e",
-        name="Studio E",
-        description="Voice booth",
-        color="#9C27B0"
-    )
+# Default studios for initial setup
+DEFAULT_STUDIOS = {
+    "studio-a": {"name": "Studio A", "description": "Main broadcast studio", "color": "#F44336", "recorder_id": 1},
+    "studio-b": {"name": "Studio B", "description": "Secondary studio", "color": "#4CAF50", "recorder_id": 2},
+    "studio-c": {"name": "Studio C", "description": "Production studio", "color": "#2196F3", "recorder_id": 3},
+    "studio-d": {"name": "Studio D", "description": "Edit suite", "color": "#FF9800"},
+    "studio-e": {"name": "Studio E", "description": "Voice booth", "color": "#9C27B0"}
 }
 
-# Update recorders with studio assignments
-for studio in _studios.values():
-    if studio.recorder_id and studio.recorder_id in _recorders:
-        _recorders[studio.recorder_id].studio_id = studio.id
 
+def _serialize_studios() -> dict:
+    """Serialize studios for persistence."""
+    return {
+        studio_id: {
+            "name": s.name,
+            "description": s.description,
+            "color": s.color,
+            "recorder_id": s.recorder_id,
+            "enabled": s.enabled
+        }
+        for studio_id, s in _studios.items()
+    }
+
+
+def _load_studios_from_store():
+    """Load studios from persistent storage."""
+    global _studios
+
+    saved = load_studios_config()
+    if saved:
+        try:
+            _studios = {}
+            for studio_id, data in saved.items():
+                _studios[studio_id] = Studio(
+                    id=studio_id,
+                    name=data.get("name", studio_id),
+                    description=data.get("description"),
+                    color=data.get("color", "#2196F3"),
+                    recorder_id=data.get("recorder_id"),
+                    enabled=data.get("enabled", True)
+                )
+            logger.info(f"Loaded {len(_studios)} studios from storage")
+        except Exception as e:
+            logger.error(f"Failed to parse saved studios: {e}")
+            _studios = {}
+    else:
+        # Initialize with defaults
+        _studios = {}
+        for studio_id, data in DEFAULT_STUDIOS.items():
+            _studios[studio_id] = Studio(
+                id=studio_id,
+                name=data["name"],
+                description=data.get("description"),
+                color=data.get("color", "#2196F3"),
+                recorder_id=data.get("recorder_id"),
+                enabled=True
+            )
+        # Save defaults
+        save_studios_config(_serialize_studios())
+        logger.info("Initialized default studios")
+
+
+def _save_studios():
+    """Save current studios to persistent storage."""
+    if not save_studios_config(_serialize_studios()):
+        logger.warning("Failed to persist studios config")
+
+
+def _sync_recorder_assignments():
+    """Sync recorder studio_id fields with studio assignments."""
+    # Clear all recorder studio assignments
+    for recorder in _recorders.values():
+        recorder.studio_id = None
+
+    # Set from studio assignments
+    for studio in _studios.values():
+        if studio.recorder_id and studio.recorder_id in _recorders:
+            _recorders[studio.recorder_id].studio_id = studio.id
+
+
+# Initialize studios from storage
+_studios: dict[str, Studio] = {}
+_load_studios_from_store()
+_sync_recorder_assignments()
 
 # User session storage for selected studios (in production, use a proper session store)
 _user_selected_studios: dict[str, str] = {}
@@ -182,6 +225,7 @@ async def create_studio(
     )
 
     _studios[studio_id] = new_studio
+    _save_studios()  # Persist change
     logger.info(f"Studio created: {studio_id} by {user.email}")
 
     return new_studio
@@ -206,6 +250,7 @@ async def update_studio(
     if update.enabled is not None:
         studio.enabled = update.enabled
 
+    _save_studios()  # Persist change
     logger.info(f"Studio updated: {studio_id} by {user.email}")
     return studio
 
@@ -221,6 +266,8 @@ async def delete_studio(studio_id: str, user: User = Depends(get_current_user)):
         _recorders[studio.recorder_id].studio_id = None
 
     del _studios[studio_id]
+    _save_studios()  # Persist change
+    _save_recorders()  # Persist recorder changes
     logger.info(f"Studio deleted: {studio_id} by {user.email}")
 
     return {"message": "Studio deleted"}
@@ -257,6 +304,9 @@ async def assign_recorder(
     else:
         studio.recorder_id = None
         logger.info(f"Recorder unassigned from {studio_id} by {user.email}")
+
+    _save_studios()  # Persist change
+    _save_recorders()  # Persist recorder changes
 
     return studio
 

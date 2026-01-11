@@ -75,6 +75,33 @@ export const useCaptureStore = defineStore('capture', () => {
     }
   }
 
+  async function fetchConfig() {
+    try {
+      const response = await fetch('/api/control/config')
+      if (response.ok) {
+        const data = await response.json()
+        if (data) {
+          config.value = {
+            sourceType: data.source_type || 'aes67',
+            multicastAddr: data.multicast_addr || '239.69.1.1',
+            port: data.port || 5004,
+            sampleRate: data.sample_rate || 48000,
+            channels: data.channels || 2,
+            format: data.format || 'wav',
+            bitrate: data.bitrate || 128000,
+            archiveRoot: data.archive_root || '/var/lib/audyn',
+            archiveLayout: data.archive_layout || 'dailydir',
+            archivePeriod: data.archive_period || 3600,
+            archiveClock: data.archive_clock || 'localtime',
+            ptpInterface: data.ptp_interface || null
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch config:', err)
+    }
+  }
+
   async function fetchSources() {
     try {
       const response = await fetch('/api/sources/')
@@ -243,6 +270,7 @@ export const useCaptureStore = defineStore('capture', () => {
 
     // Actions
     fetchStatus,
+    fetchConfig,
     fetchSources,
     startCapture,
     stopCapture,

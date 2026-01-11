@@ -12,8 +12,10 @@ from pydantic import BaseModel
 from typing import Optional
 from enum import Enum
 import logging
+import os
 
 from ..auth.entra import get_current_user, User
+from ..services.config_store import load_global_config, save_global_config
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,31 @@ _current_status = CaptureStatus(state=CaptureState.STOPPED)
 _current_config: Optional[CaptureConfig] = None
 
 
+def _load_config_from_store():
+    """Load global config from persistent storage."""
+    global _current_config
+    saved = load_global_config()
+    if saved:
+        try:
+            _current_config = CaptureConfig(**saved)
+            logger.info("Loaded global config from persistent storage")
+        except Exception as e:
+            logger.error(f"Failed to parse saved config: {e}")
+            _current_config = None
+    else:
+        # Initialize with sensible defaults
+        _current_config = CaptureConfig(
+            archive_root=os.path.expanduser("~/audyn-archive")
+        )
+        # Save defaults to file
+        save_global_config(_current_config.model_dump())
+        logger.info("Initialized default global config")
+
+
+# Load config on module import
+_load_config_from_store()
+
+
 @router.get("/status", response_model=CaptureStatus)
 async def get_capture_status(user: User = Depends(get_current_user)):
     """Get current capture status."""
@@ -112,6 +139,11 @@ async def set_capture_config(
         )
 
     _current_config = config
+
+    # Persist to file storage
+    if not save_global_config(config.model_dump()):
+        logger.warning("Failed to persist config to file storage")
+
     logger.info(f"Config updated by {user.email}: {config}")
     return {"message": "Configuration updated", "config": config}
 

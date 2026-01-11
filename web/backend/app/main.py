@@ -22,6 +22,7 @@ from .api.recorders import router as recorders_router
 from .api.studios import router as studios_router
 from .websocket.levels import router as ws_router
 from .services.audyn import AudynService
+from .services.recorder_manager import get_recorder_manager
 
 # Configure logging
 logging.basicConfig(
@@ -43,9 +44,14 @@ async def lifespan(app: FastAPI):
     audyn_service = AudynService()
     await audyn_service.initialize()
 
+    # Initialize recorder manager
+    recorder_manager = get_recorder_manager()
+    await recorder_manager.initialize()
+
     yield
 
     logger.info("Shutting down Audyn Web Service...")
+    await recorder_manager.shutdown()
     await audyn_service.shutdown()
 
 

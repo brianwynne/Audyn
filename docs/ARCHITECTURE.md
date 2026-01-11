@@ -418,7 +418,8 @@ app/
 │   ├── assets.py        - File browser and management
 │   └── stream.py        - Audio streaming/preview
 ├── services/
-│   └── audyn.py         - Audyn process management
+│   ├── audyn.py         - Audyn process management
+│   └── config_store.py  - File-based configuration persistence
 └── websocket/
     └── levels.py        - Real-time audio level streaming
 ```
@@ -452,6 +453,51 @@ src/
     ├── MiniMeter.vue    - Minimal meter for tables
     └── RecorderCard.vue - Recorder status card
 ```
+
+---
+
+## Configuration Persistence
+
+The web application uses a file-based configuration persistence system to store all settings without requiring a database.
+
+### Config Store (`services/config_store.py`)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   CONFIGURATION PERSISTENCE                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Storage Location: ~/.config/audyn/                              │
+│                                                                  │
+│  ┌──────────────────┐    ┌──────────────────┐                   │
+│  │  global.json     │    │  recorders.json  │                   │
+│  │  - archive_root  │    │  - active_count  │                   │
+│  │  - format        │    │  - recorder cfgs │                   │
+│  │  - layout        │    │  - studio assign │                   │
+│  └──────────────────┘    └──────────────────┘                   │
+│                                                                  │
+│  ┌──────────────────┐    ┌──────────────────┐                   │
+│  │  studios.json    │    │  sources.json    │                   │
+│  │  - studio list   │    │  - AES67 sources │                   │
+│  │  - names/colors  │    │  - active source │                   │
+│  │  - descriptions  │    │  - multicast cfg │                   │
+│  └──────────────────┘    └──────────────────┘                   │
+│                                                                  │
+│  ┌──────────────────┐                                           │
+│  │  auth.json       │                                           │
+│  │  - tenant_id     │                                           │
+│  │  - client_id     │                                           │
+│  │  - breakglass    │                                           │
+│  └──────────────────┘                                           │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- Thread-safe file operations with locking
+- Atomic writes (temp file + rename)
+- Automatic directory creation
+- JSON format for easy inspection and backup
 
 ---
 

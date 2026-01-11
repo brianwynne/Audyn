@@ -28,6 +28,8 @@ class RecorderState(str, Enum):
 
 class OutputFormat(str, Enum):
     WAV = "wav"
+    FLAC = "flac"
+    MP3 = "mp3"
     OPUS = "opus"
 
 
@@ -45,6 +47,11 @@ class ArchiveClock(str, Enum):
     PTP = "ptp"
 
 
+class SourceType(str, Enum):
+    AES67 = "aes67"
+    PIPEWIRE = "pipewire"
+
+
 class ChannelLevel(BaseModel):
     """Audio level for a single channel."""
     name: str
@@ -56,15 +63,19 @@ class ChannelLevel(BaseModel):
 
 class RecorderConfig(BaseModel):
     """Configuration for a single recorder."""
-    source_type: str = "aes67"
-    multicast_addr: str = "239.69.1.1"
+    source_type: SourceType = SourceType.AES67
+    source_id: Optional[str] = None  # Links to AES67Source when source_type=aes67
+    multicast_addr: Optional[str] = "239.69.1.1"  # Manual config when source_id is None
     port: int = 5004
+    pipewire_target: Optional[str] = None  # PipeWire node/device name when source_type=pipewire
     sample_rate: int = 48000
+    bit_depth: int = 24
     channels: int = 2
     payload_type: int = 96
     samples_per_packet: int = 48
     format: OutputFormat = OutputFormat.WAV
-    bitrate: int = 128000
+    bitrate: int = 128000  # For MP3/Opus
+    flac_compression: int = 5  # For FLAC (0-8)
     archive_root: str = "/var/lib/audyn"
     archive_layout: ArchiveLayout = ArchiveLayout.DAILYDIR
     archive_period: int = 3600
