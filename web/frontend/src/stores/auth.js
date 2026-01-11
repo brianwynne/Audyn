@@ -14,6 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
   const error = ref(null)
   const selectedStudioId = ref(null)
+  const explicitlyLoggedOut = ref(false)
 
   // Getters
   const isAuthenticated = computed(() => !!user.value)
@@ -27,6 +28,11 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Actions
   async function checkAuth() {
+    // Don't auto-restore session if user explicitly logged out
+    if (explicitlyLoggedOut.value) {
+      return
+    }
+
     loading.value = true
     error.value = null
 
@@ -38,7 +44,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (response.ok) {
         user.value = await response.json()
       } else if (response.status === 401) {
-        // Not authenticated, try dev mode login
+        // Not authenticated - try dev mode login
         await loginDev()
       }
     } catch (err) {
@@ -52,6 +58,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login() {
     loading.value = true
     error.value = null
+    explicitlyLoggedOut.value = false
 
     try {
       // Redirect to Entra ID login
@@ -131,6 +138,7 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = null
       token.value = null
       selectedStudioId.value = null
+      explicitlyLoggedOut.value = true
 
       if (data.logout_url) {
         window.location.href = data.logout_url
