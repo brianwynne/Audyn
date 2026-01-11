@@ -1,0 +1,119 @@
+#!/bin/bash
+set -e
+
+AUDYN_USER="audyn"
+AUDYN_GROUP="audyn"
+AUDYN_HOME="/var/lib/audyn"
+AUDYN_ARCHIVE="/var/lib/audyn/archive"
+AUDYN_CONFIG="/etc/audyn"
+AUDYN_LOG="/var/log/audyn"
+AUDYN_OPT="/opt/audyn"
+
+case "$1" in
+    configure)
+        # Create system user and group
+        if ! getent group "$AUDYN_GROUP" > /dev/null 2>&1; then
+            groupadd --system "$AUDYN_GROUP"
+            echo "Created system group: $AUDYN_GROUP"
+        fi
+
+        if ! getent passwd "$AUDYN_USER" > /dev/null 2>&1; then
+            useradd --system \
+                --gid "$AUDYN_GROUP" \
+                --home-dir "$AUDYN_HOME" \
+                --shell /usr/sbin/nologin \
+                --comment "Audyn Audio Capture Service" \
+                "$AUDYN_USER"
+            echo "Created system user: $AUDYN_USER"
+        fi
+
+        # Create directories
+        mkdir -p "$AUDYN_HOME"
+        mkdir -p "$AUDYN_ARCHIVE"
+        mkdir -p "$AUDYN_CONFIG"
+        mkdir -p "$AUDYN_LOG"
+
+        # Set ownership and permissions
+        chown -R "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_HOME"
+        chown -R "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_ARCHIVE"
+        chown -R "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_LOG"
+        chown root:$AUDYN_GROUP "$AUDYN_CONFIG"
+        chmod 750 "$AUDYN_HOME"
+        chmod 750 "$AUDYN_ARCHIVE"
+        chmod 750 "$AUDYN_LOG"
+        chmod 755 "$AUDYN_CONFIG"
+
+        # Create default configuration if not exists
+        if [ ! -f "$AUDYN_CONFIG/global.json" ]; then
+            cat > "$AUDYN_CONFIG/global.json" << 'EOFCONFIG'
+{
+  "source_type": "aes67",
+  "multicast_addr": "239.69.1.1",
+  "port": 5004,
+  "sample_rate": 48000,
+  "channels": 2,
+  "format": "wav",
+  "bitrate": 128000,
+  "archive_root": "/var/lib/audyn/archive",
+  "archive_layout": "dailydir",
+  "archive_period": 3600,
+  "archive_clock": "localtime",
+  "ptp_interface": null
+}
+EOFCONFIG
+            chown "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_CONFIG/global.json"
+            chmod 640 "$AUDYN_CONFIG/global.json"
+        fi
+
+        # Set up Python virtual environment
+        if [ ! -d "$AUDYN_OPT/backend/venv" ]; then
+            echo "Setting up Python virtual environment..."
+            python3 -m venv "$AUDYN_OPT/backend/venv"
+            "$AUDYN_OPT/backend/venv/bin/pip" install --upgrade pip
+            "$AUDYN_OPT/backend/venv/bin/pip" install -r "$AUDYN_OPT/backend/requirements.txt"
+        fi
+
+        # Set permissions on opt directory
+        chown -R "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_OPT"
+
+        # Enable nginx site
+        if [ -f /etc/nginx/sites-available/audyn ]; then
+            ln -sf /etc/nginx/sites-available/audyn /etc/nginx/sites-enabled/audyn
+            # Remove default site if exists
+            rm -f /etc/nginx/sites-enabled/default
+        fi
+
+        # Reload systemd and enable services
+        systemctl daemon-reload
+        systemctl enable audyn-web.service
+        systemctl enable nginx.service
+
+        # Start services
+        systemctl restart nginx.service
+        systemctl start audyn-web.service
+
+        echo ""
+        echo "========================================"
+        echo "  Audyn installation complete!"
+        echo "========================================"
+        echo ""
+        echo "Web interface: http://<management-ip>/"
+        echo "Default archive: $AUDYN_ARCHIVE"
+        echo "Configuration: $AUDYN_CONFIG"
+        echo "Logs: $AUDYN_LOG"
+        echo ""
+        echo "Configure authentication via the web UI"
+        echo "at Settings > Authentication Settings"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

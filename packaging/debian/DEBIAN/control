@@ -1,0 +1,24 @@
+Package: audyn
+Version: 1.0.0
+Section: sound
+Priority: optional
+Architecture: amd64
+Depends: python3 (>= 3.10), python3-pip, python3-venv, nginx, pipewire, libopus0, libogg0
+Recommends: pipewire-audio-client-libraries, wireplumber
+Maintainer: B. Wynne <admin@audyn.local>
+Description: Professional Audio Capture & Archival Engine
+ Audyn is a professional-grade audio capture and archival system
+ designed for broadcast and production environments.
+ .
+ Features:
+  - AES67/SMPTE ST 2110-30 audio capture
+  - PipeWire local audio capture
+  - WAV and Opus output formats
+  - Time-based file rotation with multiple naming layouts
+  - Real-time audio level metering
+  - Web-based management interface
+  - Microsoft Entra ID authentication with RBAC
+ .
+ The web interface is accessible on the management network while
+ AES67 capture operates on a dedicated audio network interface.
+Homepage: https://github.com/brianwynne/Audyn

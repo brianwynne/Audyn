@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Stop services
+        systemctl stop audyn-web.service 2>/dev/null || true
+        systemctl disable audyn-web.service 2>/dev/null || true
+
+        # Remove nginx site
+        rm -f /etc/nginx/sites-enabled/audyn
+        systemctl reload nginx 2>/dev/null || true
+        ;;
+
+    failed-upgrade)
+        ;;
+
+    *)
+        echo "prerm called with unknown argument: $1" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

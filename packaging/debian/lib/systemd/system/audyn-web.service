@@ -1,0 +1,50 @@
+[Unit]
+Description=Audyn Web Service
+Documentation=https://github.com/brianwynne/Audyn
+After=network.target pipewire.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+User=audyn
+Group=audyn
+
+# Environment
+Environment="AUDYN_CONFIG_DIR=/etc/audyn"
+Environment="AUDYN_ARCHIVE_ROOT=/var/lib/audyn/archive"
+Environment="AUDYN_BIN=/usr/bin/audyn"
+Environment="AUDYN_LOG_DIR=/var/log/audyn"
+
+# Working directory
+WorkingDirectory=/opt/audyn/backend
+
+# Start command - bind to localhost only for security
+# nginx will proxy requests from the management interface
+ExecStart=/opt/audyn/backend/venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 1 \
+    --log-level info
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/audyn
+ReadWritePaths=/var/log/audyn
+ReadWritePaths=/etc/audyn
+
+# Resource limits
+LimitNOFILE=65535
+
+# Logging
+StandardOutput=append:/var/log/audyn/web.log
+StandardError=append:/var/log/audyn/web-error.log
+
+[Install]
+WantedBy=multi-user.target
