@@ -116,6 +116,7 @@ class User(BaseModel):
     name: str
     role: UserRole = UserRole.STUDIO
     studio_id: Optional[str] = None  # For studio users, their assigned studio
+    selected_studio_id: Optional[str] = None  # Currently selected studio for session
     roles: list[str] = []  # Legacy compatibility
 
     @property

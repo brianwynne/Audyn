@@ -27,36 +27,73 @@
         </template>
       </v-list-item>
 
+      <!-- Current Studio Indicator (for non-admins) -->
+      <div v-if="!authStore.isAdmin && currentStudio" class="px-4 py-2">
+        <v-chip
+          :color="currentStudio.color"
+          variant="flat"
+          size="small"
+          block
+          class="justify-center"
+        >
+          <v-icon start size="small">mdi-broadcast</v-icon>
+          {{ currentStudio.name }}
+        </v-chip>
+      </div>
+
       <v-divider />
 
       <v-list density="compact" nav>
-        <v-list-item
-          prepend-icon="mdi-view-dashboard"
-          title="Overview"
-          value="overview"
-          :to="{ name: 'overview' }"
-        />
-        <v-list-item
-          prepend-icon="mdi-folder-music"
-          title="Files"
-          value="files"
-          :to="{ name: 'files' }"
-        />
+        <!-- Regular user items -->
+        <template v-if="!authStore.isAdmin">
+          <v-list-item
+            v-if="authStore.hasSelectedStudio"
+            prepend-icon="mdi-view-dashboard"
+            title="My Studio"
+            value="studio-view"
+            :to="{ name: 'studio-view', params: { id: authStore.selectedStudioId } }"
+          />
+          <v-list-item
+            prepend-icon="mdi-swap-horizontal"
+            title="Switch Studio"
+            value="studio-select"
+            :to="{ name: 'studio-select' }"
+          />
+        </template>
 
-        <!-- Admin-only items -->
+        <!-- Admin items -->
         <template v-if="authStore.isAdmin">
+          <v-list-item
+            prepend-icon="mdi-broadcast"
+            title="Studios"
+            value="studio-select"
+            :to="{ name: 'studio-select' }"
+          />
+
           <v-divider class="my-2" />
           <v-list-subheader>Admin</v-list-subheader>
 
           <v-list-item
+            prepend-icon="mdi-folder-music"
+            title="All Files"
+            value="files"
+            :to="{ name: 'files' }"
+          />
+          <v-list-item
+            prepend-icon="mdi-view-dashboard"
+            title="All Recorders"
+            value="overview"
+            :to="{ name: 'overview' }"
+          />
+          <v-list-item
             prepend-icon="mdi-record-circle"
-            title="Recorders"
+            title="Recorder Config"
             value="recorders"
             :to="{ name: 'recorders' }"
           />
           <v-list-item
-            prepend-icon="mdi-broadcast"
-            title="Studios"
+            prepend-icon="mdi-radio-tower"
+            title="Studio Config"
             value="studios"
             :to="{ name: 'studios' }"
           />
@@ -147,17 +184,27 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useCaptureStore } from '@/stores/capture'
 import { useRecordersStore } from '@/stores/recorders'
+import { useStudiosStore } from '@/stores/studios'
 
 const router = useRouter()
 const theme = useTheme()
 const authStore = useAuthStore()
 const captureStore = useCaptureStore()
 const recordersStore = useRecordersStore()
+const studiosStore = useStudiosStore()
 
 // Recording count across all recorders
 const recordingCount = computed(() =>
   recordersStore.recordingRecorders.length
 )
+
+// Current studio for non-admin users
+const currentStudio = computed(() => {
+  if (authStore.selectedStudioId) {
+    return studiosStore.getStudioById(authStore.selectedStudioId)
+  }
+  return null
+})
 
 // UI State
 const drawer = ref(true)
@@ -201,7 +248,11 @@ onMounted(async () => {
     await captureStore.fetchStatus()
     await captureStore.fetchSources()
     await recordersStore.fetchRecorders()
+    await studiosStore.fetchStudios()
     recordersStore.connectLevels()
+
+    // Fetch user's selected studio
+    await authStore.fetchSelectedStudio()
   }
 })
 
@@ -211,7 +262,9 @@ watch(() => authStore.isAuthenticated, async (isAuth) => {
     await captureStore.fetchStatus()
     await captureStore.fetchSources()
     await recordersStore.fetchRecorders()
+    await studiosStore.fetchStudios()
     recordersStore.connectLevels()
+    await authStore.fetchSelectedStudio()
   } else {
     recordersStore.disconnectLevels()
   }

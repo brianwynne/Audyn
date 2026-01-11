@@ -85,6 +85,10 @@ for studio in _studios.values():
         _recorders[studio.recorder_id].studio_id = studio.id
 
 
+# User session storage for selected studios (in production, use a proper session store)
+_user_selected_studios: dict[str, str] = {}
+
+
 def require_admin(user: User):
     """Check if user is admin."""
     if not user.is_admin:
@@ -102,6 +106,57 @@ def get_studio(studio_id: str) -> Studio:
 async def list_studios(user: User = Depends(get_current_user)):
     """List all studios."""
     return list(_studios.values())
+
+
+@router.get("/accessible", response_model=list[Studio])
+async def get_accessible_studios(user: User = Depends(get_current_user)):
+    """Get studios accessible to the current user."""
+    # Admins can access all studios
+    if user.is_admin:
+        return list(_studios.values())
+
+    # Studio users can access all studios (for viewing files)
+    # But their primary studio is highlighted
+    return list(_studios.values())
+
+
+@router.get("/current-selection")
+async def get_current_selection(user: User = Depends(get_current_user)):
+    """Get the user's current studio selection."""
+    studio_id = _user_selected_studios.get(user.id)
+    if studio_id and studio_id in _studios:
+        return {
+            "studio_id": studio_id,
+            "studio": _studios[studio_id]
+        }
+    return {"studio_id": None, "studio": None}
+
+
+@router.post("/select/{studio_id}")
+async def select_studio(studio_id: str, user: User = Depends(get_current_user)):
+    """Select a studio for the current session."""
+    # Verify studio exists
+    studio = get_studio(studio_id)
+
+    # Store selection
+    _user_selected_studios[user.id] = studio_id
+    logger.info(f"User {user.email} selected studio {studio_id}")
+
+    return {
+        "message": "Studio selected",
+        "studio_id": studio_id,
+        "studio": studio
+    }
+
+
+@router.post("/clear-selection")
+async def clear_studio_selection(user: User = Depends(get_current_user)):
+    """Clear the current studio selection."""
+    if user.id in _user_selected_studios:
+        del _user_selected_studios[user.id]
+        logger.info(f"User {user.email} cleared studio selection")
+
+    return {"message": "Selection cleared"}
 
 
 @router.get("/{studio_id}", response_model=Studio)
@@ -249,3 +304,8 @@ def get_user_studio(user: User) -> Optional[Studio]:
 def get_all_studios() -> list[Studio]:
     """Get all studios."""
     return list(_studios.values())
+
+
+def get_user_selected_studio(user_id: str) -> Optional[str]:
+    """Get the selected studio ID for a user."""
+    return _user_selected_studios.get(user_id)

@@ -66,14 +66,37 @@ class TokenResponse(BaseModel):
 # Development mode flag
 DEV_MODE = os.getenv("AUDYN_DEV_MODE", "true").lower() == "true"
 
-# Development user for testing (admin)
-DEV_USER = User(
+# Dev mode user type: "admin" or "user" (set via query param or env)
+DEV_USER_TYPE = os.getenv("AUDYN_DEV_USER_TYPE", "admin")
+
+# Development users for testing
+DEV_ADMIN = User(
     id="dev-user-001",
     email="admin@audyn.local",
     name="Admin User",
     role=UserRole.ADMIN,
     roles=["admin"]
 )
+
+DEV_STUDIO_USER = User(
+    id="dev-user-002",
+    email="user@audyn.local",
+    name="Studio User",
+    role=UserRole.STUDIO,
+    studio_id="studio-a",
+    roles=[]
+)
+
+# Current dev user (can be switched)
+_current_dev_user_type = DEV_USER_TYPE
+
+
+def get_dev_user() -> User:
+    """Get the current dev mode user."""
+    global _current_dev_user_type
+    if _current_dev_user_type == "user":
+        return DEV_STUDIO_USER
+    return DEV_ADMIN
 
 
 async def get_current_user(
@@ -84,8 +107,8 @@ async def get_current_user(
     In dev mode, returns a test user without authentication.
     """
     if DEV_MODE:
-        logger.debug("Dev mode: returning development user")
-        return DEV_USER
+        logger.debug(f"Dev mode: returning {_current_dev_user_type} user")
+        return get_dev_user()
 
     if credentials is None:
         raise HTTPException(
@@ -155,7 +178,7 @@ async def login():
         return {
             "dev_mode": True,
             "message": "Development mode - no login required",
-            "user": DEV_USER.model_dump()
+            "user": get_dev_user().model_dump()
         }
 
     params = {
@@ -223,3 +246,34 @@ async def logout():
 
     logout_url = f"{config.authority}/oauth2/v2.0/logout"
     return {"logout_url": logout_url}
+
+
+@router.post("/dev/switch-user")
+async def switch_dev_user(user_type: str = "admin"):
+    """Switch between admin and regular user in dev mode."""
+    if not DEV_MODE:
+        raise HTTPException(status_code=403, detail="Only available in dev mode")
+
+    global _current_dev_user_type
+    if user_type not in ["admin", "user"]:
+        raise HTTPException(status_code=400, detail="user_type must be 'admin' or 'user'")
+
+    _current_dev_user_type = user_type
+    logger.info(f"Dev mode: switched to {user_type} user")
+
+    return {
+        "message": f"Switched to {user_type} user",
+        "user": get_dev_user().model_dump()
+    }
+
+
+@router.get("/dev/current-user-type")
+async def get_dev_user_type():
+    """Get current dev mode user type."""
+    if not DEV_MODE:
+        raise HTTPException(status_code=403, detail="Only available in dev mode")
+
+    return {
+        "user_type": _current_dev_user_type,
+        "user": get_dev_user().model_dump()
+    }

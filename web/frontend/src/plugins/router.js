@@ -8,6 +8,23 @@ import { useAuthStore } from '@/stores/auth'
 const routes = [
   {
     path: '/',
+    name: 'home',
+    redirect: { name: 'studio-select' }  // Everyone starts at studio selection
+  },
+  {
+    path: '/studio-select',
+    name: 'studio-select',
+    component: () => import('@/views/StudioSelector.vue'),
+    meta: { requiresAuth: true, title: 'Select Studio' }
+  },
+  {
+    path: '/studio/:id',
+    name: 'studio-view',
+    component: () => import('@/views/StudioView.vue'),
+    meta: { requiresAuth: true, title: 'Studio' }
+  },
+  {
+    path: '/overview',
     name: 'overview',
     component: () => import('@/views/Overview.vue'),
     meta: { requiresAuth: true, title: 'Overview' }
@@ -46,7 +63,7 @@ const routes = [
     path: '/files',
     name: 'files',
     component: () => import('@/views/Files.vue'),
-    meta: { requiresAuth: true, title: 'Files' }
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Files' }
   },
   {
     path: '/settings',
@@ -86,8 +103,8 @@ router.beforeEach(async (to, from, next) => {
 
   // Check admin access
   if (to.meta.requiresAdmin && !authStore.isAdmin) {
-    // Redirect non-admins to overview
-    next({ name: 'overview' })
+    // Redirect non-admins to studio selector
+    next({ name: 'studio-select' })
     return
   }
 

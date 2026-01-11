@@ -13,6 +13,7 @@ export const useAuthStore = defineStore('auth', () => {
   const token = ref(null)
   const loading = ref(false)
   const error = ref(null)
+  const selectedStudioId = ref(null)
 
   // Getters
   const isAuthenticated = computed(() => !!user.value)
@@ -22,6 +23,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAdmin = computed(() => userRoles.value.includes('admin') || user.value?.role === 'admin')
   const userStudioId = computed(() => user.value?.studio_id || null)
   const userRole = computed(() => user.value?.role || 'studio')
+  const hasSelectedStudio = computed(() => !!selectedStudioId.value)
 
   // Actions
   async function checkAuth() {
@@ -128,6 +130,7 @@ export const useAuthStore = defineStore('auth', () => {
 
       user.value = null
       token.value = null
+      selectedStudioId.value = null
 
       if (data.logout_url) {
         window.location.href = data.logout_url
@@ -139,12 +142,35 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  function setSelectedStudio(studioId) {
+    selectedStudioId.value = studioId
+  }
+
+  function clearSelectedStudio() {
+    selectedStudioId.value = null
+  }
+
+  async function fetchSelectedStudio() {
+    try {
+      const response = await fetch('/api/studios/current-selection')
+      if (response.ok) {
+        const data = await response.json()
+        selectedStudioId.value = data.studio_id
+        return data.studio_id
+      }
+    } catch (err) {
+      console.error('Failed to fetch selected studio:', err)
+    }
+    return null
+  }
+
   return {
     // State
     user,
     token,
     loading,
     error,
+    selectedStudioId,
 
     // Getters
     isAuthenticated,
@@ -154,12 +180,16 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     userStudioId,
     userRole,
+    hasSelectedStudio,
 
     // Actions
     checkAuth,
     login,
     loginDev,
     handleCallback,
-    logout
+    logout,
+    setSelectedStudio,
+    clearSelectedStudio,
+    fetchSelectedStudio
   }
 })

@@ -12,6 +12,7 @@ export const useStudiosStore = defineStore('studios', () => {
   const studios = ref([])
   const loading = ref(false)
   const error = ref(null)
+  const studioFiles = ref({})  // Files organized by studio ID
 
   // Getters
   const getStudioById = (id) =>
@@ -174,11 +175,37 @@ export const useStudiosStore = defineStore('studios', () => {
     }
   }
 
+  async function fetchStudioFiles(studioId) {
+    try {
+      const response = await fetch(`/api/assets/browse?studio_id=${studioId}`)
+      if (response.ok) {
+        const data = await response.json()
+        studioFiles.value[studioId] = data.files || []
+        return data.files || []
+      }
+      return []
+    } catch (err) {
+      console.error('Failed to fetch studio files:', err)
+      return []
+    }
+  }
+
+  async function fetchAllStudioFiles() {
+    for (const studio of studios.value) {
+      await fetchStudioFiles(studio.id)
+    }
+  }
+
+  function getFilesForStudio(studioId) {
+    return studioFiles.value[studioId] || []
+  }
+
   return {
     // State
     studios,
     loading,
     error,
+    studioFiles,
 
     // Getters
     getStudioById,
@@ -192,6 +219,9 @@ export const useStudiosStore = defineStore('studios', () => {
     deleteStudio,
     assignRecorder,
     unassignRecorder,
-    getStudioRecordings
+    getStudioRecordings,
+    fetchStudioFiles,
+    fetchAllStudioFiles,
+    getFilesForStudio
   }
 })

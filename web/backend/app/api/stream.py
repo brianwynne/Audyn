@@ -2,6 +2,7 @@
 Audio Streaming API
 
 Stream audio for in-browser preview and playback.
+Supports growing files for live broadcast production.
 
 Copyright: (c) 2026 B. Wynne
 License: GPLv2 or later
@@ -14,7 +15,8 @@ import os
 import subprocess
 import asyncio
 import logging
-from typing import Optional
+import time
+from typing import Optional, AsyncGenerator
 
 from ..auth.entra import get_current_user, User
 
@@ -24,9 +26,133 @@ router = APIRouter()
 
 ARCHIVE_ROOT = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn")
 
+# Configuration for growing file handling
+GROWING_FILE_POLL_INTERVAL = 0.1  # 100ms polling for new data
+GROWING_FILE_TIMEOUT = 5.0  # Wait up to 5 seconds for new data before assuming file is complete
+STREAM_CHUNK_SIZE = 8192  # 8KB chunks for streaming
+
+
+async def stream_growing_file(file_path: Path) -> AsyncGenerator[bytes, None]:
+    """
+    Stream a file that may still be growing (being written to).
+    Continuously reads new data as it becomes available.
+
+    This is critical for broadcast production where recordings
+    need to be played back while still being captured.
+    """
+    last_position = 0
+    last_size = 0
+    stall_start = None
+
+    while True:
+        try:
+            current_size = file_path.stat().st_size
+        except FileNotFoundError:
+            logger.warning(f"File disappeared during streaming: {file_path}")
+            break
+
+        if current_size > last_position:
+            # New data available
+            stall_start = None
+
+            with open(file_path, 'rb') as f:
+                f.seek(last_position)
+                while True:
+                    chunk = f.read(STREAM_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    last_position = f.tell()
+                    yield chunk
+
+            last_size = current_size
+        else:
+            # No new data - file might be complete or writer is slow
+            if stall_start is None:
+                stall_start = time.time()
+            elif time.time() - stall_start > GROWING_FILE_TIMEOUT:
+                # No new data for timeout period - assume file is complete
+                logger.debug(f"File stream complete (no new data): {file_path}")
+                break
+
+            # Wait before checking again
+            await asyncio.sleep(GROWING_FILE_POLL_INTERVAL)
+
+
+async def transcode_growing_file(
+    file_path: Path,
+    output_format: str = "mp3",
+    follow: bool = True
+) -> AsyncGenerator[bytes, None]:
+    """
+    Transcode audio file to browser-compatible format.
+    Handles growing files by using FFmpeg's ability to follow input.
+
+    Args:
+        file_path: Path to the audio file
+        output_format: Output format (mp3 or aac)
+        follow: If True, follow growing file; if False, transcode existing content only
+    """
+    # Build FFmpeg command for growing file support
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
+
+    # Input options for growing files
+    if follow:
+        # Use -re for real-time reading (helps with growing files)
+        # and -f to specify input format hint based on extension
+        ext = file_path.suffix.lower()
+        if ext == '.wav':
+            cmd.extend(["-f", "wav"])
+        elif ext in ['.opus', '.ogg']:
+            cmd.extend(["-f", "ogg"])
+
+        # Allow FFmpeg to wait for more data
+        cmd.extend(["-thread_queue_size", "512"])
+
+    cmd.extend(["-i", str(file_path)])
+
+    # Output options
+    if output_format == "mp3":
+        cmd.extend([
+            "-c:a", "libmp3lame",
+            "-b:a", "192k",
+            "-f", "mp3"
+        ])
+    else:  # aac
+        cmd.extend([
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-f", "adts"
+        ])
+
+    # Output to stdout
+    cmd.append("-")
+
+    logger.debug(f"Starting transcode: {' '.join(cmd)}")
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    try:
+        while True:
+            chunk = await process.stdout.read(STREAM_CHUNK_SIZE)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        # Ensure process is terminated
+        if process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                process.kill()
+
 
 async def transcode_to_mp3(file_path: Path, start_time: float = 0):
-    """Transcode audio file to MP3 for browser playback."""
+    """Legacy transcode function for compatibility."""
     cmd = [
         "ffmpeg",
         "-i", str(file_path),
@@ -44,32 +170,7 @@ async def transcode_to_mp3(file_path: Path, start_time: float = 0):
     )
 
     while True:
-        chunk = await process.stdout.read(8192)
-        if not chunk:
-            break
-        yield chunk
-
-
-async def transcode_to_aac(file_path: Path, start_time: float = 0):
-    """Transcode audio file to AAC for HLS streaming."""
-    cmd = [
-        "ffmpeg",
-        "-i", str(file_path),
-        "-ss", str(start_time),
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-f", "adts",
-        "-"
-    ]
-
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-
-    while True:
-        chunk = await process.stdout.read(8192)
+        chunk = await process.stdout.read(STREAM_CHUNK_SIZE)
         if not chunk:
             break
         yield chunk
@@ -79,11 +180,85 @@ async def transcode_to_aac(file_path: Path, start_time: float = 0):
 async def stream_preview(
     file_path: str,
     start: float = 0,
+    follow: bool = True,
     user: User = Depends(get_current_user)
 ):
     """
     Stream audio file for browser preview.
     Transcodes to MP3 for broad browser compatibility.
+
+    Args:
+        file_path: Relative path to audio file within archive
+        start: Start time in seconds (for seeking)
+        follow: If True, follow growing file for live playback
+
+    This endpoint is designed for broadcast production use:
+    - Supports playback of files that are still being recorded
+    - Uses chunked transfer encoding (no Content-Length)
+    - Minimal buffering for low latency
+    """
+    full_path = Path(ARCHIVE_ROOT) / file_path
+
+    # Security: ensure path is within archive root
+    try:
+        full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not full_path.is_file():
+        raise HTTPException(status_code=400, detail="Not a file")
+
+    # Check if file is likely still being written
+    # (recently modified and small or growing)
+    is_growing = False
+    try:
+        stat = full_path.stat()
+        age = time.time() - stat.st_mtime
+        # Consider file "growing" if modified in last 10 seconds
+        is_growing = age < 10
+    except:
+        pass
+
+    if is_growing:
+        logger.info(f"Streaming growing file: {full_path}")
+
+    # Use appropriate streaming method
+    if start > 0:
+        # Seeking requested - use standard transcode
+        generator = transcode_to_mp3(full_path, start)
+    else:
+        # Start from beginning - use growing file aware transcode
+        generator = transcode_growing_file(full_path, "mp3", follow=follow)
+
+    return StreamingResponse(
+        generator,
+        media_type="audio/mpeg",
+        headers={
+            # No Content-Length for growing files - use chunked encoding
+            "Transfer-Encoding": "chunked",
+            # Prevent caching for live content
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            # Allow range requests for seeking (when not following)
+            "Accept-Ranges": "none" if follow else "bytes",
+        }
+    )
+
+
+@router.get("/raw/{file_path:path}")
+async def stream_raw(
+    file_path: str,
+    follow: bool = True,
+    user: User = Depends(get_current_user)
+):
+    """
+    Stream raw audio file without transcoding.
+    Useful for WAV files that browsers can play natively.
+    Supports growing files for live playback.
     """
     full_path = Path(ARCHIVE_ROOT) / file_path
 
@@ -98,12 +273,26 @@ async def stream_preview(
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail="Not a file")
 
+    # Determine MIME type
+    ext = full_path.suffix.lower()
+    mime_types = {
+        '.wav': 'audio/wav',
+        '.mp3': 'audio/mpeg',
+        '.ogg': 'audio/ogg',
+        '.opus': 'audio/ogg',
+        '.aac': 'audio/aac',
+        '.m4a': 'audio/mp4',
+    }
+    media_type = mime_types.get(ext, 'application/octet-stream')
+
     return StreamingResponse(
-        transcode_to_mp3(full_path, start),
-        media_type="audio/mpeg",
+        stream_growing_file(full_path) if follow else open(full_path, 'rb'),
+        media_type=media_type,
         headers={
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "no-cache"
+            "Transfer-Encoding": "chunked",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
         }
     )
 
@@ -225,8 +414,42 @@ async def get_audio_info(
             "codec": audio_stream.get("codec_name") if audio_stream else None,
             "sample_rate": int(audio_stream.get("sample_rate", 0)) if audio_stream else None,
             "channels": audio_stream.get("channels") if audio_stream else None,
-            "channel_layout": audio_stream.get("channel_layout") if audio_stream else None
+            "channel_layout": audio_stream.get("channel_layout") if audio_stream else None,
+            # Include flag indicating if file may be growing
+            "growing": (time.time() - full_path.stat().st_mtime) < 10
         }
     except Exception as e:
         logger.error(f"FFprobe failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to get audio info")
+
+
+@router.get("/status/{file_path:path}")
+async def get_file_status(
+    file_path: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Get status of an audio file including whether it's still being written.
+    Useful for UI to show recording indicator and update duration.
+    """
+    full_path = Path(ARCHIVE_ROOT) / file_path
+
+    try:
+        full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    stat = full_path.stat()
+    age = time.time() - stat.st_mtime
+
+    return {
+        "path": file_path,
+        "size": stat.st_size,
+        "modified": stat.st_mtime,
+        "age_seconds": age,
+        "growing": age < 10,  # Consider growing if modified in last 10 seconds
+        "recording": age < 2,  # Consider actively recording if modified in last 2 seconds
+    }
