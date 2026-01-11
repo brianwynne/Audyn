@@ -81,9 +81,14 @@ def is_audio_file(path: Path) -> bool:
 @router.get("/browse", response_model=Directory)
 async def browse_directory(
     path: str = "",
+    studio_id: Optional[str] = None,
     user: User = Depends(get_current_user)
 ):
-    """Browse archive directory."""
+    """Browse archive directory. Can filter by studio_id to get all files recursively."""
+    # If studio_id is provided, use it as the path and search recursively
+    if studio_id:
+        path = studio_id
+
     # Sanitize path to prevent directory traversal
     clean_path = Path(path).resolve()
     full_path = Path(ARCHIVE_ROOT) / path
@@ -104,13 +109,24 @@ async def browse_directory(
     files = []
     total_size = 0
 
-    for item in sorted(full_path.iterdir()):
-        if item.is_dir():
-            directories.append(item.name)
-        elif item.is_file() and is_audio_file(item):
-            file_info = get_file_info(item)
-            files.append(file_info)
-            total_size += file_info.size
+    # If studio_id provided, search recursively for all audio files
+    if studio_id:
+        for item in full_path.rglob("*"):
+            if item.is_file() and is_audio_file(item):
+                file_info = get_file_info(item)
+                files.append(file_info)
+                total_size += file_info.size
+        # Sort by modified time, newest first
+        files.sort(key=lambda x: x.modified, reverse=True)
+    else:
+        # Standard directory listing
+        for item in sorted(full_path.iterdir()):
+            if item.is_dir():
+                directories.append(item.name)
+            elif item.is_file() and is_audio_file(item):
+                file_info = get_file_info(item)
+                files.append(file_info)
+                total_size += file_info.size
 
     parent = None
     if path:

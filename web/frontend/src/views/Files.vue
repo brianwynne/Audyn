@@ -4,16 +4,32 @@
       <h1 class="text-h4">Archive Files</h1>
 
       <div class="d-flex gap-2 align-center">
-        <!-- Studio filter (admin only) -->
+        <!-- Studio filter -->
         <v-select
-          v-if="authStore.isAdmin"
           v-model="selectedStudioId"
           :items="studioOptions"
+          item-title="title"
+          item-value="value"
           label="Studio"
           density="compact"
           hide-details
           clearable
-          style="max-width: 200px"
+          style="min-width: 150px"
+          class="mr-2"
+          @update:model-value="onStudioChange"
+        />
+
+        <!-- Recorder filter -->
+        <v-select
+          v-model="selectedRecorderId"
+          :items="recorderOptions"
+          item-title="title"
+          item-value="value"
+          label="Recorder"
+          density="compact"
+          hide-details
+          clearable
+          style="min-width: 150px"
           class="mr-2"
         />
 
@@ -24,7 +40,7 @@
           density="compact"
           hide-details
           clearable
-          style="max-width: 300px"
+          style="max-width: 250px"
         />
         <v-btn icon @click="fetchFiles">
           <v-icon>mdi-refresh</v-icon>
@@ -44,34 +60,6 @@
       Viewing recordings for: <strong>{{ currentStudio.name }}</strong>
     </v-alert>
 
-    <!-- Breadcrumb -->
-    <v-breadcrumbs :items="breadcrumbs" class="pa-0 mb-4">
-      <template v-slot:divider>
-        <v-icon icon="mdi-chevron-right" />
-      </template>
-    </v-breadcrumbs>
-
-    <!-- Directories -->
-    <v-row v-if="currentDir.directories.length" class="mb-4">
-      <v-col
-        v-for="dir in currentDir.directories"
-        :key="dir"
-        cols="6"
-        sm="4"
-        md="3"
-        lg="2"
-      >
-        <v-card
-          hover
-          class="text-center pa-4"
-          @click="navigateTo(dir)"
-        >
-          <v-icon icon="mdi-folder" size="48" color="warning" />
-          <div class="mt-2 text-truncate">{{ dir }}</div>
-        </v-card>
-      </v-col>
-    </v-row>
-
     <!-- Files Table -->
     <v-card>
       <v-data-table
@@ -88,6 +76,12 @@
               class="mr-2"
             />
             {{ item.name }}
+          </div>
+        </template>
+
+        <template v-slot:item.location="{ item }">
+          <div class="text-caption">
+            {{ getFileLocation(item.path) }}
           </div>
         </template>
 
@@ -179,6 +173,8 @@ const studiosStore = useStudiosStore()
 
 // State
 const currentPath = ref('')
+const allFiles = ref([])  // All files from search
+const displayedFiles = ref([])  // Filtered files for display
 const currentDir = ref({
   path: '',
   name: 'Archive',
@@ -191,12 +187,13 @@ const currentDir = ref({
 const search = ref('')
 const selectedFile = ref(null)
 const selectedStudioId = ref(null)
+const selectedRecorderId = ref(null)
 const deleteDialog = ref({
   show: false,
   file: null
 })
 
-// Studio options for admin filter
+// Studio options for filter
 const studioOptions = computed(() => [
   { title: 'All Studios', value: null },
   ...studiosStore.studios.map(s => ({
@@ -204,6 +201,27 @@ const studioOptions = computed(() => [
     value: s.id
   }))
 ])
+
+// Recorder options - extracted from file paths
+const recorderOptions = computed(() => {
+  const recorders = new Set()
+  allFiles.value.forEach(f => {
+    const parts = f.path.split('/')
+    if (parts.length >= 2) {
+      // Filter recorders by selected studio if one is selected
+      if (!selectedStudioId.value || parts[0] === selectedStudioId.value) {
+        recorders.add(parts[1])
+      }
+    }
+  })
+  return [
+    { title: 'All Recorders', value: null },
+    ...Array.from(recorders).sort().map(r => ({
+      title: r,
+      value: r
+    }))
+  ]
+})
 
 // Current studio for studio users
 const currentStudio = computed(() => {
@@ -231,6 +249,7 @@ function canDeleteFile(file) {
 // Table headers
 const headers = [
   { title: 'Name', key: 'name', sortable: true },
+  { title: 'Location', key: 'location', sortable: true, width: 200 },
   { title: 'Size', key: 'size', sortable: true, width: 120 },
   { title: 'Modified', key: 'modified', sortable: true, width: 180 },
   { title: 'Format', key: 'format', sortable: true, width: 100 },
@@ -260,33 +279,76 @@ const breadcrumbs = computed(() => {
   return items
 })
 
-const filteredFiles = computed(() => {
-  if (!search.value) return currentDir.value.files
+// Filter function
+function applyFilters() {
+  let files = [...allFiles.value]
 
-  const query = search.value.toLowerCase()
-  return currentDir.value.files.filter(f =>
-    f.name.toLowerCase().includes(query)
-  )
-})
+  // Filter by studio
+  if (selectedStudioId.value) {
+    const studioPrefix = selectedStudioId.value + '/'
+    files = files.filter(f => f.path.startsWith(studioPrefix))
+  }
+
+  // Filter by recorder
+  if (selectedRecorderId.value) {
+    files = files.filter(f => {
+      const parts = f.path.split('/')
+      return parts.length >= 2 && parts[1] === selectedRecorderId.value
+    })
+  }
+
+  // Filter by search query
+  if (search.value) {
+    const query = search.value.toLowerCase()
+    files = files.filter(f => f.name.toLowerCase().includes(query))
+  }
+
+  displayedFiles.value = files
+}
+
+// For backwards compatibility with template
+const filteredFiles = computed(() => displayedFiles.value)
 
 // Methods
 async function fetchFiles() {
   try {
-    let url = `/api/assets/browse?path=${encodeURIComponent(currentPath.value)}`
-
-    // Add studio filter
-    const studioId = authStore.isAdmin ? selectedStudioId.value : authStore.userStudioId
-    if (studioId) {
-      url += `&studio_id=${encodeURIComponent(studioId)}`
-    }
-
-    const response = await fetch(url)
+    // Fetch all files using search endpoint
+    const response = await fetch('/api/assets/search?limit=500')
     if (response.ok) {
-      currentDir.value = await response.json()
+      const data = await response.json()
+      allFiles.value = data.files || []
+
+      // Extract unique directories for navigation
+      const dirSet = new Set()
+      allFiles.value.forEach(f => {
+        const parts = f.path.split('/')
+        if (parts.length > 1) {
+          dirSet.add(parts[0])
+        }
+      })
+
+      currentDir.value = {
+        path: '',
+        name: 'Archive',
+        parent: null,
+        directories: Array.from(dirSet).sort(),
+        files: [],
+        total_size: allFiles.value.reduce((sum, f) => sum + f.size, 0),
+        file_count: allFiles.value.length
+      }
+
+      // Apply filters after fetching
+      applyFilters()
     }
   } catch (err) {
     console.error('Failed to fetch files:', err)
   }
+}
+
+function onStudioChange(value) {
+  selectedStudioId.value = value
+  selectedRecorderId.value = null
+  applyFilters()
 }
 
 function navigateTo(path) {
@@ -318,6 +380,15 @@ function getFileColor(format) {
     case 'mp3': return 'green'
     default: return 'grey'
   }
+}
+
+function getFileLocation(path) {
+  // Extract studio/recorder from path like "studio-a/recorder-1/file.wav"
+  const parts = path.split('/')
+  if (parts.length >= 2) {
+    return `${parts[0]} / ${parts[1]}`
+  }
+  return parts[0] || ''
 }
 
 function formatSize(bytes) {
@@ -366,8 +437,20 @@ watch(currentPath, () => {
   fetchFiles()
 })
 
+// Apply filters when studio changes
 watch(selectedStudioId, () => {
-  fetchFiles()
+  selectedRecorderId.value = null
+  applyFilters()
+})
+
+// Apply filters when recorder changes
+watch(selectedRecorderId, () => {
+  applyFilters()
+})
+
+// Apply filters when search changes
+watch(search, () => {
+  applyFilters()
 })
 
 // Lifecycle

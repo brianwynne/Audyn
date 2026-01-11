@@ -14,7 +14,7 @@
             {{ playerStore.currentFile?.name || 'No file loaded' }}
           </div>
           <div class="text-caption text-medium-emphasis">
-            {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+            {{ formatTime(currentTime) }} / {{ formatTime(effectiveDuration) }}
           </div>
         </div>
 
@@ -62,13 +62,18 @@
         <div class="progress-container flex-grow-1 mx-4">
           <v-slider
             v-model="currentTime"
-            :max="duration || 100"
-            :disabled="!playerStore.currentFile"
+            :max="effectiveDuration || 100"
+            :disabled="!playerStore.currentFile || isGrowing"
             hide-details
             color="primary"
             track-color="grey-lighten-2"
-            @update:model-value="seek"
+            @start="onSeekStart"
+            @end="onSeekEnd"
           />
+          <div v-if="isGrowing" class="text-caption text-error d-flex align-center">
+            <v-icon size="x-small" class="mr-1" color="error">mdi-record-circle</v-icon>
+            LIVE - Recording in progress
+          </div>
         </div>
 
         <!-- Volume Control -->
@@ -127,14 +132,32 @@ const playerStore = usePlayerStore()
 const audioElement = ref(null)
 const currentTime = ref(0)
 const duration = ref(0)
+const fileDuration = ref(0)  // Duration from file metadata (reliable)
 const volume = ref(100)
 const isMuted = ref(false)
 const isPlaying = ref(false)
+const isGrowing = ref(false)  // Whether file is still being recorded
+const seekPosition = ref(0)  // For seeking in completed files
+const isSeeking = ref(false)
 
 // Computed
 const audioSrc = computed(() => {
   if (!playerStore.currentFile?.path) return ''
-  return `/api/stream/preview/${playerStore.currentFile.path}`
+  // For completed files, include start parameter when seeking
+  const base = `/api/stream/preview/${playerStore.currentFile.path}`
+  if (!isGrowing.value && seekPosition.value > 0) {
+    return `${base}?start=${seekPosition.value}&follow=false`
+  }
+  // For growing files or initial playback
+  return `${base}?follow=${isGrowing.value}`
+})
+
+// Use file metadata duration if audio element returns Infinity
+const effectiveDuration = computed(() => {
+  if (duration.value && isFinite(duration.value) && duration.value > 0) {
+    return duration.value
+  }
+  return fileDuration.value || 0
 })
 
 const volumeIcon = computed(() => {
@@ -192,14 +215,51 @@ function stop() {
 function recue() {
   if (!audioElement.value) return
   // Seek to beginning and play
-  audioElement.value.currentTime = 0
-  currentTime.value = 0
+  if (isGrowing.value) {
+    // For growing files, just seek the audio element
+    audioElement.value.currentTime = 0
+    currentTime.value = 0
+    audioElement.value.play()
+  } else {
+    // For completed files, reload from start
+    seekPosition.value = 0
+    currentTime.value = 0
+    audioElement.value.load()
+    audioElement.value.play()
+  }
+}
+
+function onSeekStart() {
+  isSeeking.value = true
+}
+
+function onSeekEnd() {
+  if (!audioElement.value || isGrowing.value) {
+    isSeeking.value = false
+    return
+  }
+
+  // For completed files, reload with new start position
+  const newTime = currentTime.value
+  seekPosition.value = newTime
+  isSeeking.value = false
+
+  // Reload the audio with the new start position
+  audioElement.value.load()
   audioElement.value.play()
 }
 
-function seek(time) {
-  if (!audioElement.value) return
-  audioElement.value.currentTime = time
+async function fetchFileInfo(filePath) {
+  try {
+    const response = await fetch(`/api/stream/info/${filePath}`)
+    if (response.ok) {
+      const info = await response.json()
+      fileDuration.value = info.duration || 0
+      isGrowing.value = info.growing || false
+    }
+  } catch (err) {
+    console.error('Failed to fetch file info:', err)
+  }
 }
 
 function setVolume(vol) {
@@ -227,8 +287,9 @@ function onLoadedMetadata() {
 }
 
 function onTimeUpdate() {
-  if (audioElement.value && !isNaN(audioElement.value.currentTime)) {
-    currentTime.value = audioElement.value.currentTime
+  if (audioElement.value && !isNaN(audioElement.value.currentTime) && !isSeeking.value) {
+    // Add seekPosition offset for completed files that were seeked
+    currentTime.value = seekPosition.value + audioElement.value.currentTime
   }
 }
 
@@ -266,10 +327,18 @@ function handleKeydown(event) {
 }
 
 // Watch for file changes
-watch(() => playerStore.currentFile, (newFile) => {
+watch(() => playerStore.currentFile, async (newFile) => {
   if (newFile && audioElement.value) {
+    // Reset state
     currentTime.value = 0
     duration.value = 0
+    fileDuration.value = 0
+    seekPosition.value = 0
+    isGrowing.value = false
+
+    // Fetch file info to get duration and growing status
+    await fetchFileInfo(newFile.path)
+
     // Auto-play when new file is loaded
     audioElement.value.load()
   }
