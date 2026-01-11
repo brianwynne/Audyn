@@ -66,8 +66,12 @@ cp "$PROJECT_DIR/web/backend/requirements.txt" "$BUILD_DIR/$PACKAGE_NAME/opt/aud
 # Build frontend
 echo "[4/6] Building frontend..."
 cd "$PROJECT_DIR/web/frontend"
-npm ci
-npm run build
+echo "Node version: $(node --version)"
+echo "NPM version: $(npm --version)"
+echo "Running npm ci..."
+npm ci --loglevel verbose 2>&1 || { echo "npm ci failed"; exit 1; }
+echo "Running npm run build..."
+npm run build 2>&1 || { echo "npm run build failed"; exit 1; }
 ls -la dist/
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/frontend"
 cp -r "$PROJECT_DIR/web/frontend/dist/"* "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/frontend/"
