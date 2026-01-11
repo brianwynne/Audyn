@@ -12,7 +12,7 @@
 # Usage: ./build-deb.sh [version]
 #
 
-set -e
+set -ex
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -26,6 +26,11 @@ PACKAGE_NAME="audyn_${VERSION}_${ARCH}"
 echo "========================================"
 echo "  Building Audyn $VERSION ($ARCH)"
 echo "========================================"
+echo ""
+echo "SCRIPT_DIR: $SCRIPT_DIR"
+echo "PROJECT_DIR: $PROJECT_DIR"
+echo "BUILD_DIR: $BUILD_DIR"
+echo "DEBIAN_DIR: $DEBIAN_DIR"
 echo ""
 
 # Clean previous build
@@ -45,10 +50,11 @@ sed -i "s/^Version:.*/Version: $VERSION/" "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/contr
 # Build audyn binary
 echo "[2/6] Building audyn binary..."
 cd "$PROJECT_DIR"
-make clean
+make clean || true
 make
+ls -la audyn
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/usr/bin"
-cp audyn "$BUILD_DIR/$PACKAGE_NAME/usr/bin/"
+cp "$PROJECT_DIR/audyn" "$BUILD_DIR/$PACKAGE_NAME/usr/bin/"
 chmod 755 "$BUILD_DIR/$PACKAGE_NAME/usr/bin/audyn"
 
 # Copy backend
@@ -60,10 +66,11 @@ cp "$PROJECT_DIR/web/backend/requirements.txt" "$BUILD_DIR/$PACKAGE_NAME/opt/aud
 # Build frontend
 echo "[4/6] Building frontend..."
 cd "$PROJECT_DIR/web/frontend"
-npm ci --silent
-npm run build --silent
+npm ci
+npm run build
+ls -la dist/
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/frontend"
-cp -r dist/* "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/frontend/"
+cp -r "$PROJECT_DIR/web/frontend/dist/"* "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/frontend/"
 
 # Copy systemd service
 echo "[5/6] Copying systemd service..."
@@ -91,6 +98,11 @@ dpkg-deb --build --root-owner-group "$PACKAGE_NAME"
 
 # Move to packaging directory
 mv "$PACKAGE_NAME.deb" "$SCRIPT_DIR/"
+
+# Show package info
+echo ""
+ls -la "$SCRIPT_DIR/$PACKAGE_NAME.deb"
+dpkg-deb --info "$SCRIPT_DIR/$PACKAGE_NAME.deb"
 
 # Cleanup
 rm -rf "$BUILD_DIR"
