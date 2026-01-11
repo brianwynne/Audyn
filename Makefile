@@ -7,7 +7,7 @@
 
 CC      := gcc
 CFLAGS  := -Wall -Wextra -O2 -g
-LDFLAGS := -lpthread
+LDFLAGS := -lpthread -lm
 
 # Package config for dependencies
 PKG_CONFIG := pkg-config
@@ -27,6 +27,7 @@ SRCS := audyn.c \
         core/ptp_clock.c \
         core/jitter_buffer.c \
         core/archive_policy.c \
+        core/level_meter.c \
         sink/wav_sink.c \
         sink/opus_sink.c \
         input/pipewire_input.c \
@@ -58,6 +59,7 @@ core/audio_queue.o: core/audio_queue.c core/audio_queue.h core/frame_pool.h
 core/ptp_clock.o: core/ptp_clock.c core/ptp_clock.h core/log.h
 core/jitter_buffer.o: core/jitter_buffer.c core/jitter_buffer.h core/log.h
 core/archive_policy.o: core/archive_policy.c core/archive_policy.h core/log.h
+core/level_meter.o: core/level_meter.c core/level_meter.h core/frame_pool.h core/log.h
 sink/wav_sink.o: sink/wav_sink.c sink/wav_sink.h core/log.h
 sink/opus_sink.o: sink/opus_sink.c sink/opus_sink.h
 input/pipewire_input.o: input/pipewire_input.c input/pipewire_input.h \

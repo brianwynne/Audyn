@@ -19,12 +19,22 @@ import time
 from typing import Optional, AsyncGenerator
 
 from ..auth.entra import get_current_user, User
+from ..services.config_store import load_global_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-ARCHIVE_ROOT = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn")
+
+def get_archive_root() -> str:
+    """
+    Get the archive root directory from configuration.
+    Falls back to environment variable, then default.
+    """
+    config = load_global_config()
+    if config and config.get("archive_root"):
+        return config["archive_root"]
+    return os.getenv("AUDYN_ARCHIVE_ROOT", os.path.expanduser("~/audyn-archive"))
 
 # Configuration for growing file handling
 GROWING_FILE_POLL_INTERVAL = 0.1  # 100ms polling for new data
@@ -310,11 +320,11 @@ async def stream_preview(
     - Uses chunked transfer encoding (no Content-Length)
     - Minimal buffering for low latency
     """
-    full_path = Path(ARCHIVE_ROOT) / file_path
+    full_path = Path(get_archive_root()) / file_path
 
     # Security: ensure path is within archive root
     try:
-        full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+        full_path.resolve().relative_to(Path(get_archive_root()).resolve())
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -373,10 +383,10 @@ async def stream_raw(
     Useful for WAV files that browsers can play natively.
     Supports growing files for live playback.
     """
-    full_path = Path(ARCHIVE_ROOT) / file_path
+    full_path = Path(get_archive_root()) / file_path
 
     try:
-        full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+        full_path.resolve().relative_to(Path(get_archive_root()).resolve())
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -445,10 +455,10 @@ async def get_waveform(
     Generate waveform visualization data for an audio file.
     Returns peak values for rendering a waveform display.
     """
-    full_path = Path(ARCHIVE_ROOT) / file_path
+    full_path = Path(get_archive_root()) / file_path
 
     try:
-        full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+        full_path.resolve().relative_to(Path(get_archive_root()).resolve())
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -495,10 +505,10 @@ async def get_audio_info(
     user: User = Depends(get_current_user)
 ):
     """Get detailed audio file information using FFprobe."""
-    full_path = Path(ARCHIVE_ROOT) / file_path
+    full_path = Path(get_archive_root()) / file_path
 
     try:
-        full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+        full_path.resolve().relative_to(Path(get_archive_root()).resolve())
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -555,10 +565,10 @@ async def get_file_status(
     Get status of an audio file including whether it's still being written.
     Useful for UI to show recording indicator and update duration.
     """
-    full_path = Path(ARCHIVE_ROOT) / file_path
+    full_path = Path(get_archive_root()) / file_path
 
     try:
-        full_path.resolve().relative_to(Path(ARCHIVE_ROOT).resolve())
+        full_path.resolve().relative_to(Path(get_archive_root()).resolve())
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 

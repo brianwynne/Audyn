@@ -658,8 +658,8 @@ int audyn_archive_policy_next_path(
         return -1;
     }
 
-    /* For accurate layout with no rotation, use actual time */
-    if (p->rotation_period_sec == 0 && p->layout == AUDYN_ARCHIVE_LAYOUT_ACCURATE) {
+    /* For accurate layout, always use actual time (not period boundary) */
+    if (p->layout == AUDYN_ARCHIVE_LAYOUT_ACCURATE) {
         if (ns_to_tm(now_ns, p->clock_source, &tm, &csec) != 0) {
             LOG_ERROR("archive: failed to convert time for accurate layout");
             return -1;

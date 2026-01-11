@@ -72,6 +72,22 @@ class CaptureConfig(BaseModel):
     ptp_interface: Optional[str] = None
 
 
+class PartialCaptureConfig(BaseModel):
+    """Partial capture configuration for updates (all fields optional)."""
+    source_type: Optional[str] = None
+    multicast_addr: Optional[str] = None
+    port: Optional[int] = None
+    sample_rate: Optional[int] = None
+    channels: Optional[int] = None
+    format: Optional[OutputFormat] = None
+    bitrate: Optional[int] = None
+    archive_root: Optional[str] = None
+    archive_layout: Optional[ArchiveLayout] = None
+    archive_period: Optional[int] = None
+    archive_clock: Optional[ArchiveClock] = None
+    ptp_interface: Optional[str] = None
+
+
 class CaptureStatus(BaseModel):
     """Current capture status."""
     state: CaptureState
@@ -126,10 +142,10 @@ async def get_capture_config(user: User = Depends(get_current_user)):
 
 @router.post("/config")
 async def set_capture_config(
-    config: CaptureConfig,
+    config: PartialCaptureConfig,
     user: User = Depends(get_current_user)
 ):
-    """Update capture configuration."""
+    """Update capture configuration (partial updates supported)."""
     global _current_config
 
     if _current_status.state == CaptureState.RECORDING:
@@ -138,14 +154,23 @@ async def set_capture_config(
             detail="Cannot change config while recording. Stop capture first."
         )
 
-    _current_config = config
+    # Load existing config from disk to merge with
+    existing = load_global_config() or {}
+
+    # Merge incoming changes with existing config
+    # Only update fields that were explicitly provided (not None)
+    updates = config.model_dump(exclude_none=True)
+    merged = {**existing, **updates}
+
+    # Create full config from merged data
+    _current_config = CaptureConfig(**merged)
 
     # Persist to file storage
-    if not save_global_config(config.model_dump()):
+    if not save_global_config(_current_config.model_dump()):
         logger.warning("Failed to persist config to file storage")
 
-    logger.info(f"Config updated by {user.email}: {config}")
-    return {"message": "Configuration updated", "config": config}
+    logger.info(f"Config updated by {user.email}: {updates}")
+    return {"message": "Configuration updated", "config": _current_config}
 
 
 @router.post("/start")

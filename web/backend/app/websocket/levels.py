@@ -17,6 +17,7 @@ import math
 
 from ..api.recorders import get_all_recorders, update_recorder_levels
 from ..models import ChannelLevel, RecorderState
+from ..services.recorder_manager import get_recorder_manager
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +75,9 @@ class ConnectionManager:
 
     async def _broadcast_levels(self):
         """Continuously broadcast audio levels for all recorders."""
-        # Phase offsets for each recorder to simulate different audio sources
+        # Phase offsets for each recorder to simulate different audio sources (fallback)
         phases = {i: random.random() * 6.28 for i in range(1, 7)}
+        manager = get_recorder_manager()
 
         while self._running:
             try:
@@ -84,46 +86,53 @@ class ConnectionManager:
 
                 for recorder in recorders:
                     if recorder.state == RecorderState.RECORDING:
-                        # Simulate realistic varying audio levels
-                        phase_l = phases.get(recorder.id, 0)
-                        phase_r = phase_l + 0.3
+                        # Try to get real levels from recorder manager
+                        real_levels = manager.get_levels(recorder.id)
 
-                        phases[recorder.id] = phase_l + 0.12
+                        if real_levels:
+                            # Use real levels from audyn process
+                            levels = real_levels
+                        else:
+                            # Fallback to simulated levels (for mock or when real not yet available)
+                            phase_l = phases.get(recorder.id, 0)
+                            phase_r = phase_l + 0.3
 
-                        base_level = -18
-                        variation = 12
+                            phases[recorder.id] = phase_l + 0.12
 
-                        level_l_db = base_level + (math.sin(phase_l) * variation * 0.5) + \
-                                     (random.random() - 0.5) * 6
-                        level_r_db = base_level + (math.sin(phase_r) * variation * 0.5) + \
-                                     (random.random() - 0.5) * 6
+                            base_level = -18
+                            variation = 12
 
-                        # Clamp to realistic range
-                        level_l_db = max(-60, min(0, level_l_db))
-                        level_r_db = max(-60, min(0, level_r_db))
+                            level_l_db = base_level + (math.sin(phase_l) * variation * 0.5) + \
+                                         (random.random() - 0.5) * 6
+                            level_r_db = base_level + (math.sin(phase_r) * variation * 0.5) + \
+                                         (random.random() - 0.5) * 6
 
-                        # Occasional peaks
-                        if random.random() > 0.95:
-                            level_l_db = min(0, level_l_db + 10)
-                        if random.random() > 0.95:
-                            level_r_db = min(0, level_r_db + 10)
+                            # Clamp to realistic range
+                            level_l_db = max(-60, min(0, level_l_db))
+                            level_r_db = max(-60, min(0, level_r_db))
 
-                        levels = [
-                            ChannelLevel(
-                                name="L",
-                                level_db=round(level_l_db, 1),
-                                level_linear=round(10 ** (level_l_db / 20), 3),
-                                peak_db=round(level_l_db + 3, 1),
-                                clipping=level_l_db > -1
-                            ),
-                            ChannelLevel(
-                                name="R",
-                                level_db=round(level_r_db, 1),
-                                level_linear=round(10 ** (level_r_db / 20), 3),
-                                peak_db=round(level_r_db + 3, 1),
-                                clipping=level_r_db > -1
-                            )
-                        ]
+                            # Occasional peaks
+                            if random.random() > 0.95:
+                                level_l_db = min(0, level_l_db + 10)
+                            if random.random() > 0.95:
+                                level_r_db = min(0, level_r_db + 10)
+
+                            levels = [
+                                ChannelLevel(
+                                    name="L",
+                                    level_db=round(level_l_db, 1),
+                                    level_linear=round(10 ** (level_l_db / 20), 3),
+                                    peak_db=round(level_l_db + 3, 1),
+                                    clipping=level_l_db > -1
+                                ),
+                                ChannelLevel(
+                                    name="R",
+                                    level_db=round(level_r_db, 1),
+                                    level_linear=round(10 ** (level_r_db / 20), 3),
+                                    peak_db=round(level_r_db + 3, 1),
+                                    clipping=level_r_db > -1
+                                )
+                            ]
                     else:
                         # Silence when not recording
                         levels = [

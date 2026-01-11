@@ -54,6 +54,7 @@
 #include "pipewire_input.h"
 #include "ptp_clock.h"
 #include "archive_policy.h"
+#include "level_meter.h"
 
 /* -------- Types -------- */
 
@@ -146,6 +147,9 @@ static void usage(const char *argv0)
         "  -v                     Debug logging\n"
         "  -q                     Errors only\n"
         "  --syslog               Log to syslog\n\n"
+        "Metering:\n"
+        "  --levels               Output JSON audio levels to stdout (~30fps)\n"
+        "  --levels-interval <ms> Level output interval (default 33ms)\n\n"
         "Examples:\n"
         "  Single file:\n"
         "    %s -o recording.wav -m 239.69.1.1 -p 5004\n"
@@ -257,6 +261,9 @@ typedef struct worker_ctx {
     uint64_t files_written;
     uint64_t frames_written;
     uint64_t rotations;
+
+    /* Level metering (optional) */
+    audyn_level_meter_t *level_meter;
 
 } worker_ctx_t;
 
@@ -439,6 +446,9 @@ static void *worker_main(void *arg)
     }
 
     /* Main processing loop */
+    uint32_t silence_counter = 0;
+    const uint32_t silence_threshold = 50; /* Generate silence after 50ms of no data */
+
     while (!*ctx->stop_flag) {
         /* Check for rotation (archive mode only) */
         if (ctx->archive && maybe_rotate(ctx) != 0) {
@@ -451,7 +461,42 @@ static void *worker_main(void *arg)
         audyn_audio_frame_t *frame = (audyn_audio_frame_t *)audyn_audio_queue_pop(ctx->queue);
         if (!frame) {
             usleep(1000);
+            silence_counter++;
+
+            /* Generate silence frame if no data for too long */
+            if (silence_counter >= silence_threshold) {
+                silence_counter = 0;
+
+                /* Acquire a frame for silence */
+                frame = audyn_frame_acquire(ctx->pool);
+                if (frame) {
+                    /* Fill with silence (zeros) */
+                    memset(frame->data, 0, frame->sample_frames * frame->channels * sizeof(float));
+
+                    /* Process through level meter */
+                    if (ctx->level_meter) {
+                        audyn_level_meter_process(ctx->level_meter, frame);
+                    }
+
+                    /* Write silence to sink */
+                    if (write_to_sink(ctx, frame) != 0) {
+                        LOG_ERROR("Worker: write failed");
+                        ctx->status = -1;
+                        audyn_frame_release(frame);
+                        break;
+                    }
+
+                    audyn_frame_release(frame);
+                }
+            }
             continue;
+        }
+
+        silence_counter = 0;
+
+        /* Process through level meter if enabled */
+        if (ctx->level_meter) {
+            audyn_level_meter_process(ctx->level_meter, frame);
         }
 
         /* Write to sink */
@@ -529,6 +574,10 @@ int main(int argc, char **argv)
     int use_syslog = 0;
     audyn_log_level_t lvl = AUDYN_LOG_INFO;
 
+    /* Level metering */
+    int enable_levels = 0;
+    uint32_t levels_interval_ms = 33;
+
     /* --- Parse args --- */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-o") && i + 1 < argc) {
@@ -591,6 +640,10 @@ int main(int argc, char **argv)
             lvl = AUDYN_LOG_DEBUG;
         } else if (!strcmp(argv[i], "-q")) {
             lvl = AUDYN_LOG_ERROR;
+        } else if (!strcmp(argv[i], "--levels")) {
+            enable_levels = 1;
+        } else if (!strcmp(argv[i], "--levels-interval") && i + 1 < argc) {
+            if (parse_u32(argv[++i], &levels_interval_ms) != 0) { usage(argv[0]); return 2; }
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(argv[0]);
             return 0;
@@ -760,6 +813,17 @@ int main(int argc, char **argv)
         }
     }
 
+    /* --- Create level meter (if enabled) --- */
+    audyn_level_meter_t *level_meter = NULL;
+    if (enable_levels) {
+        level_meter = audyn_level_meter_create(channels, rate, levels_interval_ms);
+        if (!level_meter) {
+            LOG_ERROR("level_meter create failed");
+            goto cleanup;
+        }
+        LOG_INFO("Level metering enabled (interval=%ums)", levels_interval_ms);
+    }
+
     /* --- Create worker context --- */
     worker_ctx_t worker_ctx;
     memset(&worker_ctx, 0, sizeof(worker_ctx));
@@ -775,6 +839,7 @@ int main(int argc, char **argv)
     worker_ctx.opus_complexity = opus_complexity;
     worker_ctx.ptp_clk = ptp_clk;
     worker_ctx.stop_flag = (volatile int *)&g_stop;
+    worker_ctx.level_meter = level_meter;
 
     /* --- Start worker thread --- */
     pthread_t worker_thread;
@@ -835,6 +900,11 @@ int main(int argc, char **argv)
     while (!g_stop) {
         usleep(50u * 1000u);
 
+        /* Output level data even if no audio (shows silence) */
+        if (level_meter) {
+            audyn_level_meter_process(level_meter, NULL);
+        }
+
         /* Check worker status */
         if (worker_ctx.status != 0) {
             LOG_ERROR("Worker error: %s", worker_ctx.error);
@@ -865,6 +935,12 @@ cleanup:
     /* Destroy PTP clock (after input is stopped) */
     if (ptp_clk) {
         audyn_ptp_clock_destroy(ptp_clk);
+    }
+
+    /* Destroy level meter */
+    if (level_meter) {
+        audyn_level_meter_flush(level_meter);
+        audyn_level_meter_destroy(level_meter);
     }
 
     /* Destroy archive policy */
