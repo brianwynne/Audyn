@@ -1,0 +1,29 @@
+[Unit]
+Description=Audyn AES67 Audio Capture Service
+Documentation=https://github.com/brianwynne/Audyn
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/audyn/audyn.conf
+ExecStart=/usr/bin/audyn \
+    --archive-root ${ARCHIVE_ROOT:-/var/lib/audyn} \
+    --archive-layout ${ARCHIVE_LAYOUT:-dailydir} \
+    --archive-suffix ${ARCHIVE_SUFFIX:-opus} \
+    --archive-period ${ARCHIVE_PERIOD:-3600} \
+    -m ${MULTICAST_ADDR:-239.69.1.1} \
+    -p ${PORT:-5004}
+Restart=on-failure
+RestartSec=5
+User=audyn
+Group=audyn
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/audyn
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
