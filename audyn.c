@@ -124,6 +124,7 @@ static void usage(const char *argv0)
         "AES67 Options:\n"
         "  -m <ip>                Multicast/source IP address (required for AES67)\n"
         "  -p <port>              UDP port (default 5004)\n"
+        "  --interface <if>       Network interface for multicast (e.g., eth0)\n"
         "  --pt <type>            RTP payload type (default 96)\n"
         "  --spp <frames>         Samples per packet (default 48)\n"
         "  --rcvbuf <bytes>       Socket receive buffer size (default 2097152)\n\n"
@@ -546,6 +547,7 @@ int main(int argc, char **argv)
     uint8_t  payload_type = 96;
     uint16_t samples_per_packet = 48;
     uint32_t rcvbuf = 2097152;
+    const char *aes_interface = NULL;  /* Network interface for multicast */
 
     /* PTP defaults */
     const char *ptp_device = NULL;
@@ -616,6 +618,8 @@ int main(int argc, char **argv)
             if (parse_u32(argv[++i], &fcap) != 0) { usage(argv[0]); return 2; }
         } else if (!strcmp(argv[i], "--pipewire")) {
             input_src = INPUT_PIPEWIRE;
+        } else if (!strcmp(argv[i], "--interface") && i + 1 < argc) {
+            aes_interface = argv[++i];
         } else if (!strcmp(argv[i], "--ptp-device") && i + 1 < argc) {
             ptp_device = argv[++i];
         } else if (!strcmp(argv[i], "--ptp-interface") && i + 1 < argc) {
@@ -865,6 +869,7 @@ int main(int argc, char **argv)
         aescfg.channels = channels;
         aescfg.samples_per_packet = samples_per_packet;
         aescfg.socket_rcvbuf = rcvbuf;
+        aescfg.bind_interface = aes_interface;
 
         aes_in = audyn_aes_input_create(pool, q, &aescfg);
         if (!aes_in) {

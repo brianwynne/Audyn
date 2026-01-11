@@ -30,6 +30,8 @@ CONFIG_FILES = {
     "studios": "studios.json",      # Studio definitions
     "sources": "sources.json",      # AES67 source configurations
     "auth": "auth.json",            # Authentication settings (Entra ID, breakglass)
+    "system": "system.json",        # System settings (hostname, timezone, NTP)
+    "ssl": "ssl.json",              # SSL certificate configuration
 }
 
 
@@ -272,3 +274,23 @@ def load_auth_config() -> Optional[dict]:
 def save_auth_config(auth: dict) -> bool:
     """Save authentication configuration."""
     return get_config_store().save("auth", auth)
+
+
+def load_system_config() -> Optional[dict]:
+    """Load system configuration."""
+    return get_config_store().load("system")
+
+
+def save_system_config(system: dict) -> bool:
+    """Save system configuration."""
+    return get_config_store().save("system", system)
+
+
+def load_ssl_config() -> Optional[dict]:
+    """Load SSL certificate configuration."""
+    return get_config_store().load("ssl")
+
+
+def save_ssl_config(ssl: dict) -> bool:
+    """Save SSL certificate configuration."""
+    return get_config_store().save("ssl", ssl)

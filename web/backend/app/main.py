@@ -20,6 +20,7 @@ from .api.assets import router as assets_router
 from .api.stream import router as stream_router
 from .api.recorders import router as recorders_router
 from .api.studios import router as studios_router
+from .api.system import router as system_router
 from .websocket.levels import router as ws_router
 from .services.audyn import AudynService
 from .services.recorder_manager import get_recorder_manager
@@ -79,6 +80,7 @@ app.include_router(recorders_router, prefix="/api/recorders", tags=["Recorders"]
 app.include_router(studios_router, prefix="/api/studios", tags=["Studios"])
 app.include_router(assets_router, prefix="/api/assets", tags=["Assets"])
 app.include_router(stream_router, prefix="/api/stream", tags=["Streaming"])
+app.include_router(system_router, prefix="/api/system", tags=["System"])
 app.include_router(ws_router, prefix="/ws", tags=["WebSocket"])
 
 

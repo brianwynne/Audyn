@@ -30,7 +30,8 @@ export const useCaptureStore = defineStore('capture', () => {
     archiveLayout: 'dailydir',
     archivePeriod: 3600,
     archiveClock: 'localtime',
-    ptpInterface: null
+    ptpInterface: null,
+    aes67Interface: null
   })
 
   const sources = ref([])
@@ -93,7 +94,8 @@ export const useCaptureStore = defineStore('capture', () => {
             archiveLayout: data.archive_layout || 'dailydir',
             archivePeriod: data.archive_period || 3600,
             archiveClock: data.archive_clock || 'localtime',
-            ptpInterface: data.ptp_interface || null
+            ptpInterface: data.ptp_interface || null,
+            aes67Interface: data.aes67_interface || null
           }
         }
       }
@@ -141,7 +143,8 @@ export const useCaptureStore = defineStore('capture', () => {
           archive_layout: config.value.archiveLayout,
           archive_period: config.value.archivePeriod,
           archive_clock: config.value.archiveClock,
-          ptp_interface: config.value.ptpInterface
+          ptp_interface: config.value.ptpInterface,
+          aes67_interface: config.value.aes67Interface
         })
       })
 

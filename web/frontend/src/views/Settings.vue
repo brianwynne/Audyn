@@ -51,6 +51,30 @@
         </v-card>
       </v-col>
 
+      <!-- AES67 Network Settings -->
+      <v-col cols="12" md="6">
+        <v-card>
+          <v-card-title>
+            <v-icon icon="mdi-lan" class="mr-2" />
+            AES67 Network
+          </v-card-title>
+          <v-card-text>
+            <v-form>
+              <v-select
+                v-model="config.aes67Interface"
+                label="AES67 Interface"
+                :items="interfaces"
+                item-title="display"
+                item-value="name"
+                hint="Network interface for multicast audio reception"
+                persistent-hint
+                clearable
+              />
+            </v-form>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
       <!-- PTP Settings -->
       <v-col cols="12" md="6">
         <v-card>
@@ -68,6 +92,187 @@
                 persistent-hint
               />
             </v-form>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <!-- System Settings -->
+      <v-col cols="12" md="6">
+        <v-card>
+          <v-card-title>
+            <v-icon icon="mdi-cog" class="mr-2" />
+            System Settings
+          </v-card-title>
+          <v-card-text>
+            <v-form>
+              <v-text-field
+                v-model="systemConfig.hostname"
+                label="Hostname"
+                hint="System hostname (requires restart to apply)"
+                persistent-hint
+              />
+
+              <v-autocomplete
+                v-model="systemConfig.timezone"
+                :items="timezones"
+                label="Timezone"
+                class="mt-4"
+              />
+
+              <v-combobox
+                v-model="systemConfig.ntp_servers"
+                label="NTP Servers"
+                multiple
+                chips
+                closable-chips
+                hint="Press Enter to add a server"
+                persistent-hint
+                class="mt-4"
+              />
+            </v-form>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <!-- SSL Certificate -->
+      <v-col cols="12">
+        <v-card>
+          <v-card-title>
+            <v-icon icon="mdi-lock" class="mr-2" />
+            SSL Certificate
+          </v-card-title>
+          <v-card-text>
+            <v-alert
+              v-if="sslConfig.enabled"
+              type="success"
+              variant="tonal"
+              class="mb-4"
+            >
+              SSL enabled for {{ sslConfig.domain }}
+              <span v-if="sslConfig.cert_type">
+                ({{ sslConfig.cert_type === 'letsencrypt' ? "Let's Encrypt" : 'Manual' }})
+              </span>
+              <span v-if="sslConfig.cert_expiry">
+                - expires {{ formatDate(sslConfig.cert_expiry) }}
+              </span>
+            </v-alert>
+            <v-alert
+              v-else
+              type="warning"
+              variant="tonal"
+              class="mb-4"
+            >
+              SSL not configured - using HTTP
+            </v-alert>
+
+            <v-tabs v-model="sslTab" class="mb-4">
+              <v-tab value="letsencrypt">Let's Encrypt (Auto)</v-tab>
+              <v-tab value="manual">Manual Upload</v-tab>
+            </v-tabs>
+
+            <v-window v-model="sslTab">
+              <!-- Let's Encrypt Tab -->
+              <v-window-item value="letsencrypt">
+                <v-alert type="info" variant="tonal" density="compact" class="mb-4">
+                  Requires port 80 to be accessible from the internet for domain verification.
+                </v-alert>
+                <v-form>
+                  <v-row>
+                    <v-col cols="12" md="6">
+                      <v-text-field
+                        v-model="sslConfig.domain"
+                        label="Domain Name"
+                        placeholder="audyn.example.com"
+                        hint="Public domain name pointing to this server"
+                        persistent-hint
+                      />
+                    </v-col>
+                    <v-col cols="12" md="6">
+                      <v-text-field
+                        v-model="sslConfig.email"
+                        label="Email for Let's Encrypt"
+                        type="email"
+                        placeholder="admin@example.com"
+                        hint="Used for certificate expiry notifications"
+                        persistent-hint
+                      />
+                    </v-col>
+                  </v-row>
+
+                  <v-btn
+                    color="primary"
+                    class="mt-4"
+                    :loading="sslLoading"
+                    :disabled="!sslConfig.domain || !sslConfig.email"
+                    @click="enableSSL"
+                  >
+                    {{ sslConfig.enabled && sslConfig.cert_type === 'letsencrypt' ? 'Renew Certificate' : 'Enable HTTPS' }}
+                  </v-btn>
+                </v-form>
+              </v-window-item>
+
+              <!-- Manual Upload Tab -->
+              <v-window-item value="manual">
+                <v-alert type="info" variant="tonal" density="compact" class="mb-4">
+                  Upload your own SSL certificate and private key (PEM format).
+                </v-alert>
+                <v-form>
+                  <v-row>
+                    <v-col cols="12" md="4">
+                      <v-text-field
+                        v-model="manualCert.domain"
+                        label="Domain Name"
+                        placeholder="audyn.example.com"
+                        hint="Domain the certificate is issued for"
+                        persistent-hint
+                      />
+                    </v-col>
+                    <v-col cols="12" md="4">
+                      <v-file-input
+                        v-model="manualCert.certFile"
+                        label="Certificate File"
+                        accept=".crt,.pem,.cer"
+                        prepend-icon="mdi-certificate"
+                        hint=".crt, .pem, or .cer file"
+                        persistent-hint
+                      />
+                    </v-col>
+                    <v-col cols="12" md="4">
+                      <v-file-input
+                        v-model="manualCert.keyFile"
+                        label="Private Key File"
+                        accept=".key,.pem"
+                        prepend-icon="mdi-key"
+                        hint=".key or .pem file"
+                        persistent-hint
+                      />
+                    </v-col>
+                  </v-row>
+
+                  <v-btn
+                    color="primary"
+                    class="mt-4"
+                    :loading="sslLoading"
+                    :disabled="!manualCert.domain || !manualCert.certFile || !manualCert.keyFile"
+                    @click="uploadCertificate"
+                  >
+                    Upload & Install Certificate
+                  </v-btn>
+                </v-form>
+              </v-window-item>
+            </v-window>
+
+            <v-divider class="my-4" v-if="sslConfig.enabled" />
+
+            <v-btn
+              v-if="sslConfig.enabled"
+              color="error"
+              variant="outlined"
+              :loading="sslLoading"
+              @click="disableSSL"
+            >
+              Disable SSL
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -231,6 +436,35 @@ const stats = ref({
   totalSize: '0 GB'
 })
 
+// Network interfaces
+const interfaces = ref([])
+
+// System configuration
+const systemConfig = ref({
+  hostname: '',
+  timezone: 'UTC',
+  ntp_servers: ['pool.ntp.org']
+})
+const timezones = ref([])
+
+// SSL configuration
+const sslConfig = ref({
+  enabled: false,
+  domain: '',
+  email: '',
+  cert_expiry: null,
+  cert_type: 'none'
+})
+const sslLoading = ref(false)
+const sslTab = ref('letsencrypt')
+
+// Manual certificate upload
+const manualCert = ref({
+  domain: '',
+  certFile: null,
+  keyFile: null
+})
+
 // Authentication config
 const authConfig = ref({
   entraTenantId: '',
@@ -254,6 +488,12 @@ const layouts = [
   { title: 'Accurate (with seconds)', value: 'accurate' }
 ]
 
+// Helper to format dates
+function formatDate(dateStr) {
+  if (!dateStr) return ''
+  return new Date(dateStr).toLocaleDateString()
+}
+
 // Methods
 async function saveSettings() {
   saving.value = true
@@ -262,7 +502,7 @@ async function saveSettings() {
     // Update the store
     captureStore.config = { ...config.value }
 
-    // Save archive/PTP config to backend
+    // Save archive/PTP/AES67 config to backend
     await fetch('/api/control/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -271,7 +511,19 @@ async function saveSettings() {
         archive_layout: config.value.archiveLayout,
         archive_period: config.value.archivePeriod,
         archive_clock: config.value.archiveClock,
-        ptp_interface: config.value.ptpInterface
+        ptp_interface: config.value.ptpInterface,
+        aes67_interface: config.value.aes67Interface
+      })
+    })
+
+    // Save system config
+    await fetch('/api/system/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hostname: systemConfig.value.hostname || null,
+        timezone: systemConfig.value.timezone,
+        ntp_servers: systemConfig.value.ntp_servers
       })
     })
 
@@ -313,7 +565,13 @@ function resetSettings() {
     archiveLayout: 'dailydir',
     archivePeriod: 3600,
     archiveClock: 'localtime',
-    ptpInterface: null
+    ptpInterface: null,
+    aes67Interface: null
+  }
+  systemConfig.value = {
+    hostname: '',
+    timezone: 'UTC',
+    ntp_servers: ['pool.ntp.org']
   }
 }
 
@@ -347,11 +605,183 @@ async function fetchAuthConfig() {
   }
 }
 
+async function fetchInterfaces() {
+  try {
+    const response = await fetch('/api/system/interfaces')
+    if (response.ok) {
+      const data = await response.json()
+      interfaces.value = data.map(iface => ({
+        name: iface.name,
+        display: iface.ip_address ? `${iface.name} (${iface.ip_address})` : iface.name
+      }))
+    }
+  } catch (err) {
+    console.error('Failed to fetch interfaces:', err)
+  }
+}
+
+async function fetchTimezones() {
+  try {
+    const response = await fetch('/api/system/timezones')
+    if (response.ok) {
+      timezones.value = await response.json()
+    }
+  } catch (err) {
+    console.error('Failed to fetch timezones:', err)
+    // Provide some fallback timezones
+    timezones.value = ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris']
+  }
+}
+
+async function fetchSystemConfig() {
+  try {
+    const response = await fetch('/api/system/config')
+    if (response.ok) {
+      const data = await response.json()
+      systemConfig.value.hostname = data.hostname || ''
+      systemConfig.value.timezone = data.timezone || 'UTC'
+      systemConfig.value.ntp_servers = data.ntp_servers || ['pool.ntp.org']
+    }
+  } catch (err) {
+    console.error('Failed to fetch system config:', err)
+  }
+}
+
+async function fetchSSLConfig() {
+  try {
+    const response = await fetch('/api/system/ssl')
+    if (response.ok) {
+      const data = await response.json()
+      sslConfig.value.enabled = data.enabled || false
+      sslConfig.value.domain = data.domain || ''
+      sslConfig.value.email = data.email || ''
+      sslConfig.value.cert_expiry = data.cert_expiry || null
+      sslConfig.value.cert_type = data.cert_type || 'none'
+    }
+  } catch (err) {
+    console.error('Failed to fetch SSL config:', err)
+  }
+}
+
+async function uploadCertificate() {
+  if (!manualCert.value.domain || !manualCert.value.certFile || !manualCert.value.keyFile) {
+    alert('Domain, certificate file, and private key file are all required')
+    return
+  }
+
+  sslLoading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('domain', manualCert.value.domain)
+    formData.append('certificate', manualCert.value.certFile[0])
+    formData.append('private_key', manualCert.value.keyFile[0])
+
+    const response = await fetch('/api/system/ssl/upload', {
+      method: 'POST',
+      body: formData
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      sslConfig.value.enabled = true
+      sslConfig.value.domain = manualCert.value.domain
+      sslConfig.value.cert_type = 'manual'
+      sslConfig.value.cert_expiry = data.config?.cert_expiry || null
+      alert('SSL certificate installed successfully! The page will reload.')
+      setTimeout(() => {
+        window.location.href = `https://${manualCert.value.domain}`
+      }, 2000)
+    } else {
+      const error = await response.json()
+      alert(`Failed to install certificate: ${error.detail || 'Unknown error'}`)
+    }
+  } catch (err) {
+    console.error('Failed to upload certificate:', err)
+    alert('Failed to upload certificate. Check console for details.')
+  } finally {
+    sslLoading.value = false
+  }
+}
+
+async function enableSSL() {
+  if (!sslConfig.value.domain || !sslConfig.value.email) {
+    alert('Domain and email are required for SSL')
+    return
+  }
+
+  sslLoading.value = true
+  try {
+    const response = await fetch('/api/system/ssl/enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        domain: sslConfig.value.domain,
+        email: sslConfig.value.email
+      })
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      sslConfig.value.enabled = true
+      sslConfig.value.expires_at = data.expires_at
+      alert('SSL certificate enabled successfully! The page will reload.')
+      // Reload to switch to HTTPS
+      setTimeout(() => {
+        window.location.href = `https://${sslConfig.value.domain}`
+      }, 2000)
+    } else {
+      const error = await response.json()
+      alert(`Failed to enable SSL: ${error.detail || 'Unknown error'}`)
+    }
+  } catch (err) {
+    console.error('Failed to enable SSL:', err)
+    alert('Failed to enable SSL. Check console for details.')
+  } finally {
+    sslLoading.value = false
+  }
+}
+
+async function disableSSL() {
+  if (!confirm('Are you sure you want to disable SSL? The site will switch to HTTP.')) {
+    return
+  }
+
+  sslLoading.value = true
+  try {
+    const response = await fetch('/api/system/ssl/disable', {
+      method: 'POST'
+    })
+
+    if (response.ok) {
+      sslConfig.value.enabled = false
+      sslConfig.value.expires_at = null
+      alert('SSL disabled. The page will reload.')
+      setTimeout(() => {
+        window.location.href = `http://${window.location.hostname}`
+      }, 2000)
+    } else {
+      const error = await response.json()
+      alert(`Failed to disable SSL: ${error.detail || 'Unknown error'}`)
+    }
+  } catch (err) {
+    console.error('Failed to disable SSL:', err)
+    alert('Failed to disable SSL. Check console for details.')
+  } finally {
+    sslLoading.value = false
+  }
+}
+
 onMounted(async () => {
   // Fetch config from backend first, then copy to local state
   await captureStore.fetchConfig()
   config.value = { ...captureStore.config }
+
+  // Fetch all configuration in parallel
   fetchStats()
   fetchAuthConfig()
+  fetchInterfaces()
+  fetchTimezones()
+  fetchSystemConfig()
+  fetchSSLConfig()
 })
 </script>

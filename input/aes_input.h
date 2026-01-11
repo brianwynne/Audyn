@@ -64,6 +64,8 @@ typedef struct audyn_aes_input_cfg {
     uint16_t    samples_per_packet;
 
     uint32_t    socket_rcvbuf;
+
+    const char *bind_interface;     /* Network interface for multicast (e.g., "eth0") */
 } audyn_aes_input_cfg_t;
 
 typedef struct audyn_aes_input audyn_aes_input_t;

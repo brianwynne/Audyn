@@ -58,11 +58,39 @@ case "$1" in
   "archive_layout": "dailydir",
   "archive_period": 3600,
   "archive_clock": "localtime",
-  "ptp_interface": null
+  "ptp_interface": null,
+  "aes67_interface": null
 }
 EOFCONFIG
             chown "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_CONFIG/global.json"
             chmod 640 "$AUDYN_CONFIG/global.json"
+        fi
+
+        # Create default system configuration
+        if [ ! -f "$AUDYN_CONFIG/system.json" ]; then
+            cat > "$AUDYN_CONFIG/system.json" << 'EOFSYSTEM'
+{
+  "hostname": null,
+  "timezone": "UTC",
+  "ntp_servers": ["pool.ntp.org"]
+}
+EOFSYSTEM
+            chown "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_CONFIG/system.json"
+            chmod 640 "$AUDYN_CONFIG/system.json"
+        fi
+
+        # Create default SSL configuration
+        if [ ! -f "$AUDYN_CONFIG/ssl.json" ]; then
+            cat > "$AUDYN_CONFIG/ssl.json" << 'EOFSSL'
+{
+  "enabled": false,
+  "domain": null,
+  "email": null,
+  "auto_renew": true
+}
+EOFSSL
+            chown "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_CONFIG/ssl.json"
+            chmod 640 "$AUDYN_CONFIG/ssl.json"
         fi
 
         # Create default auth configuration with breakglass password

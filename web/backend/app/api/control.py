@@ -71,6 +71,9 @@ class CaptureConfig(BaseModel):
     # PTP settings
     ptp_interface: Optional[str] = None
 
+    # AES67 network settings
+    aes67_interface: Optional[str] = None  # Network interface for multicast
+
 
 class PartialCaptureConfig(BaseModel):
     """Partial capture configuration for updates (all fields optional)."""
@@ -86,6 +89,7 @@ class PartialCaptureConfig(BaseModel):
     archive_period: Optional[int] = None
     archive_clock: Optional[ArchiveClock] = None
     ptp_interface: Optional[str] = None
+    aes67_interface: Optional[str] = None
 
 
 class CaptureStatus(BaseModel):

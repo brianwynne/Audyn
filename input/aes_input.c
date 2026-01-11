@@ -60,6 +60,8 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -243,7 +245,28 @@ static int open_socket(audyn_aes_input_t *in) {
             close(fd);
             return -1;
         }
-        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+
+        /* Bind multicast to specific interface if configured */
+        if (in->cfg.bind_interface && in->cfg.bind_interface[0] != '\0') {
+            struct ifreq ifr;
+            memset(&ifr, 0, sizeof(ifr));
+            strncpy(ifr.ifr_name, in->cfg.bind_interface, IFNAMSIZ - 1);
+
+            if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
+                LOG_ERROR("aes_input: failed to get IP for interface '%s': %s",
+                          in->cfg.bind_interface, strerror(errno));
+                set_error_errno(in, "ioctl(SIOCGIFADDR)");
+                close(fd);
+                return -1;
+            }
+
+            struct sockaddr_in *ifaddr = (struct sockaddr_in *)&ifr.ifr_addr;
+            mreq.imr_interface.s_addr = ifaddr->sin_addr.s_addr;
+            LOG_INFO("aes_input: binding multicast to interface '%s' (%s)",
+                     in->cfg.bind_interface, inet_ntoa(ifaddr->sin_addr));
+        } else {
+            mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        }
 
         if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) != 0) {
             set_error_errno(in, "IP_ADD_MEMBERSHIP");

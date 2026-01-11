@@ -115,6 +115,11 @@ class RecorderManager:
             cmd.extend(["--pt", str(config.payload_type or 96)])
             cmd.extend(["--spp", str(config.samples_per_packet or 48)])
 
+            # AES67 network interface (from global config)
+            global_cfg = get_global_config()
+            if global_cfg and global_cfg.aes67_interface:
+                cmd.extend(["--interface", global_cfg.aes67_interface])
+
         # Audio format
         cmd.extend(["-r", str(config.sample_rate or 48000)])
         cmd.extend(["-c", str(config.channels or 2)])
