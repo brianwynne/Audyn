@@ -171,6 +171,7 @@ AES67 Options:
   -m <ip>                Multicast/source IP address (required)
   -p <port>              UDP port (default: 5004)
   --pt <type>            RTP payload type (default: 96)
+  --interface <if>       Bind to specific network interface (e.g., eth1)
 
 PTP Options:
   --ptp-device <path>    Hardware PTP clock device
@@ -206,7 +207,9 @@ Opus Options:
 - **Studio Configuration**: Create studios, assign recorders
 - **Source Management**: Configure AES67 multicast sources
 - **File Management**: Browse, play, download, and delete recordings
-- **System Settings**: Configure archive paths, formats, rotation
+- **Network Configuration**: Configure control and AES67 network interfaces (DHCP/Static IP)
+- **System Settings**: Hostname, timezone, NTP servers, SSL certificates
+- **Recording Settings**: Archive paths, formats, rotation, PTP timing
 
 ### For Studio Users
 - **Studio View**: Audio meters for assigned recorder

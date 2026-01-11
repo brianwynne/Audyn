@@ -51,6 +51,7 @@ This guide covers all configuration options for the Audyn audio capture system, 
 | `--pt <type>` | RTP payload type | `96` |
 | `--spp <frames>` | Samples per packet | `48` |
 | `--rcvbuf <bytes>` | Socket buffer size | `2097152` |
+| `--interface <if>` | Bind to network interface | All interfaces |
 
 ### PTP Options
 
@@ -333,11 +334,15 @@ The web application stores all configuration settings in JSON files located in `
 
 ```
 ~/.config/audyn/
-├── global.json      # Archive and capture settings
-├── recorders.json   # Recorder instances and assignments
-├── studios.json     # Studio definitions
-├── sources.json     # AES67 source configurations
-└── auth.json        # Authentication settings (excl. secrets)
+├── global.json         # Archive and capture settings
+├── recorders.json      # Recorder instances and assignments
+├── studios.json        # Studio definitions
+├── sources.json        # AES67 source configurations
+├── auth.json           # Authentication settings (excl. secrets)
+├── system.json         # System settings (hostname, timezone, NTP)
+├── ssl.json            # SSL certificate configuration
+├── network.json        # Control interface network configuration
+└── aes67_network.json  # AES67 interface network configuration
 ```
 
 ### global.json
@@ -431,6 +436,110 @@ Stores authentication configuration (excluding secrets).
 ```
 
 **Security Note:** The `auth.json` file stores bcrypt-hashed passwords, not plaintext. Client secrets should remain in environment variables.
+
+### system.json
+
+Stores system configuration settings.
+
+```json
+{
+  "hostname": "audyn-recorder",
+  "timezone": "Europe/London",
+  "ntp_servers": ["pool.ntp.org", "time.google.com"]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `hostname` | System hostname (requires restart to apply) |
+| `timezone` | System timezone (e.g., "UTC", "Europe/London") |
+| `ntp_servers` | List of NTP servers for time synchronization |
+
+### ssl.json
+
+Stores SSL certificate configuration.
+
+```json
+{
+  "enabled": true,
+  "domain": "audyn.example.com",
+  "email": "admin@example.com",
+  "auto_renew": true,
+  "cert_type": "letsencrypt",
+  "cert_expiry": "2026-04-10T00:00:00Z"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | Whether SSL is enabled |
+| `domain` | Domain name for the certificate |
+| `email` | Contact email for Let's Encrypt notifications |
+| `auto_renew` | Enable automatic certificate renewal |
+| `cert_type` | Certificate type: "letsencrypt" or "manual" |
+| `cert_expiry` | Certificate expiration date |
+
+**Certificate Types:**
+- **Let's Encrypt**: Automatic certificate issuance (requires port 80 internet access)
+- **Manual**: Upload your own certificate and private key (PEM format)
+
+### network.json
+
+Stores control interface network configuration.
+
+```json
+{
+  "interface": "eth0",
+  "bind_services": true,
+  "network": {
+    "interface": "eth0",
+    "mode": "static",
+    "ip_address": "192.168.1.100",
+    "netmask": "255.255.255.0",
+    "gateway": "192.168.1.1",
+    "dns_servers": ["8.8.8.8", "8.8.4.4"]
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `interface` | Network interface name (e.g., "eth0") |
+| `bind_services` | Bind web interface to this IP only |
+| `network.mode` | "dhcp" or "static" |
+| `network.ip_address` | Static IP address |
+| `network.netmask` | Subnet mask |
+| `network.gateway` | Default gateway |
+| `network.dns_servers` | List of DNS servers |
+
+### aes67_network.json
+
+Stores AES67 interface network configuration.
+
+```json
+{
+  "interface": "eth1",
+  "network": {
+    "interface": "eth1",
+    "mode": "static",
+    "ip_address": "192.168.2.100",
+    "netmask": "255.255.255.0",
+    "gateway": null,
+    "dns_servers": []
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `interface` | AES67 network interface name |
+| `network.mode` | "dhcp" or "static" |
+| `network.ip_address` | Static IP address for AES67 network |
+| `network.netmask` | Subnet mask |
+| `network.gateway` | Usually not needed for AES67 |
+| `network.dns_servers` | Usually empty for AES67 |
+
+**Note:** AES67 networks are typically isolated and don't require a gateway or DNS servers.
 
 ### Configuration Precedence
 

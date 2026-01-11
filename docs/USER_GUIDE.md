@@ -10,9 +10,10 @@ This guide explains how to use the Audyn web interface for managing audio record
 4. [Studio Configuration](#studio-configuration)
 5. [File Browser](#file-browser)
 6. [Audio Playback](#audio-playback)
-7. [User Roles](#user-roles)
-8. [Keyboard Shortcuts](#keyboard-shortcuts)
-9. [Tips and Best Practices](#tips-and-best-practices)
+7. [Settings](#settings)
+8. [User Roles](#user-roles)
+9. [Keyboard Shortcuts](#keyboard-shortcuts)
+10. [Tips and Best Practices](#tips-and-best-practices)
 
 ---
 
@@ -275,6 +276,124 @@ Click the download button (↓) to download the file.
 **Deletion Permissions:**
 - Admins can delete any file
 - Studio users can delete only their studio's files
+
+---
+
+## Settings
+
+*Admin access required*
+
+The Settings page is organized into four main sections for easy navigation.
+
+### Accessing Settings
+
+Access via sidebar: **Admin → Settings**
+
+### Network Configuration
+
+#### Control Interface
+
+Configure the management network interface:
+
+| Setting | Description |
+|---------|-------------|
+| Network Interface | Select the NIC for web UI access |
+| IP Mode | DHCP or Static |
+| IP Address | Static IP address (if static mode) |
+| Netmask | Subnet mask (default: 255.255.255.0) |
+| Gateway | Default gateway for outbound traffic |
+| DNS Servers | DNS servers for name resolution |
+| Bind to IP only | Restrict web interface to this IP |
+
+**Warning:** Changing the IP address may disconnect you. Ensure you can access the new address.
+
+#### AES67 Interface
+
+Configure the audio network interface:
+
+| Setting | Description |
+|---------|-------------|
+| Network Interface | Select the NIC for AES67 multicast |
+| IP Mode | DHCP or Static |
+| IP Address | Static IP for audio network |
+| Netmask | Subnet mask |
+| Gateway | Usually not needed for AES67 |
+
+**Note:** AES67 networks are typically isolated and don't require gateway or DNS.
+
+### Recording Settings
+
+#### Archive Storage
+
+| Setting | Description |
+|---------|-------------|
+| Archive Directory | Root path for recordings |
+| File Naming Layout | How files are organized (flat, dailydir, etc.) |
+| Rotation Period | How often to create new files (in seconds) |
+
+#### Timing & Sync
+
+| Setting | Description |
+|---------|-------------|
+| Clock Source | Local Time, UTC, or PTP/TAI |
+| PTP Interface | Network interface for PTP synchronization |
+
+### System Configuration
+
+#### Hostname & Time
+
+| Setting | Description |
+|---------|-------------|
+| Hostname | System hostname (requires restart) |
+| Timezone | System timezone |
+| NTP Servers | Time servers for synchronization |
+
+#### SSL Certificate
+
+Two options for enabling HTTPS:
+
+**Let's Encrypt (Automatic):**
+1. Enter your domain name
+2. Enter your email address
+3. Click "Enable HTTPS"
+4. Requires port 80 to be accessible from the internet
+
+**Manual Upload:**
+1. Enter your domain name
+2. Upload your certificate file (.crt, .pem)
+3. Upload your private key file (.key, .pem)
+4. Click "Upload Certificate"
+
+Use manual upload when the server is not publicly accessible.
+
+### Security & Authentication
+
+#### Microsoft Entra ID
+
+Configure Single Sign-On:
+
+| Setting | Description |
+|---------|-------------|
+| Tenant ID | Azure AD tenant identifier |
+| Client ID | Application (client) ID |
+| Client Secret | Application secret (leave empty to keep existing) |
+| Redirect URI | OAuth callback URL |
+
+#### Emergency Access
+
+The breakglass password provides admin access when Entra ID is unavailable:
+
+1. Enter a strong password
+2. Confirm the password
+3. Click "Save All Settings"
+
+**Important:** Change the default breakglass password immediately after installation.
+
+### Saving Settings
+
+- Click **Save All Settings** at the top right to save changes
+- Network changes require clicking the individual "Apply" buttons
+- Some changes (like hostname) require a system restart
 
 ---
 

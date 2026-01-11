@@ -12,9 +12,10 @@ Complete reference for the Audyn REST API and WebSocket interfaces.
 6. [Sources API](#sources-api)
 7. [Assets API](#assets-api)
 8. [Stream API](#stream-api)
-9. [WebSocket API](#websocket-api)
-10. [Data Models](#data-models)
-11. [Error Handling](#error-handling)
+9. [System API](#system-api)
+10. [WebSocket API](#websocket-api)
+11. [Data Models](#data-models)
+12. [Error Handling](#error-handling)
 
 ---
 
@@ -608,6 +609,233 @@ Stream audio for preview playback.
 | `path` | string | File path relative to archive root |
 
 **Response:** Audio stream with appropriate MIME type
+
+---
+
+## System API
+
+Endpoints for system configuration including network, SSL, and system settings.
+
+### GET /api/system/interfaces
+
+List available network interfaces.
+
+**Response:**
+```json
+[
+  {
+    "name": "eth0",
+    "ip_address": "192.168.1.100",
+    "mac_address": "00:11:22:33:44:55",
+    "is_up": true
+  },
+  {
+    "name": "eth1",
+    "ip_address": "192.168.2.100",
+    "mac_address": "00:11:22:33:44:56",
+    "is_up": true
+  }
+]
+```
+
+### GET /api/system/config
+
+Get system configuration (hostname, timezone, NTP).
+
+**Response:**
+```json
+{
+  "hostname": "audyn-recorder",
+  "timezone": "Europe/London",
+  "ntp_servers": ["pool.ntp.org"]
+}
+```
+
+### POST /api/system/config
+
+Update system configuration. **Admin only.**
+
+**Request Body:**
+```json
+{
+  "hostname": "audyn-recorder",
+  "timezone": "Europe/London",
+  "ntp_servers": ["pool.ntp.org", "time.google.com"]
+}
+```
+
+**Response:**
+```json
+{
+  "message": "System configuration updated",
+  "config": { ... }
+}
+```
+
+### GET /api/system/timezones
+
+List available timezones.
+
+**Response:**
+```json
+["Africa/Abidjan", "Africa/Accra", "America/New_York", "Europe/London", "UTC", ...]
+```
+
+### GET /api/system/network
+
+Get control interface network configuration.
+
+**Response:**
+```json
+{
+  "interface": "eth0",
+  "bind_services": true,
+  "network": {
+    "interface": "eth0",
+    "mode": "static",
+    "ip_address": "192.168.1.100",
+    "netmask": "255.255.255.0",
+    "gateway": "192.168.1.1",
+    "dns_servers": ["8.8.8.8"]
+  }
+}
+```
+
+### POST /api/system/network
+
+Update control interface network configuration. **Admin only.**
+
+**Request Body:**
+```json
+{
+  "interface": "eth0",
+  "bind_services": true,
+  "network": {
+    "interface": "eth0",
+    "mode": "static",
+    "ip_address": "192.168.1.100",
+    "netmask": "255.255.255.0",
+    "gateway": "192.168.1.1",
+    "dns_servers": ["8.8.8.8", "8.8.4.4"]
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "message": "Network configuration applied",
+  "config": { ... }
+}
+```
+
+### GET /api/system/aes67
+
+Get AES67 interface network configuration.
+
+**Response:**
+```json
+{
+  "interface": "eth1",
+  "network": {
+    "interface": "eth1",
+    "mode": "static",
+    "ip_address": "192.168.2.100",
+    "netmask": "255.255.255.0",
+    "gateway": null,
+    "dns_servers": []
+  }
+}
+```
+
+### POST /api/system/aes67
+
+Update AES67 interface network configuration. **Admin only.**
+
+**Request Body:**
+```json
+{
+  "interface": "eth1",
+  "network": {
+    "interface": "eth1",
+    "mode": "static",
+    "ip_address": "192.168.2.100",
+    "netmask": "255.255.255.0"
+  }
+}
+```
+
+### GET /api/system/ssl
+
+Get SSL certificate status.
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "domain": "audyn.example.com",
+  "email": "admin@example.com",
+  "auto_renew": true,
+  "cert_type": "letsencrypt",
+  "cert_expiry": "2026-04-10T00:00:00Z"
+}
+```
+
+### POST /api/system/ssl/enable
+
+Enable SSL with Let's Encrypt. **Admin only.**
+
+**Request Body:**
+```json
+{
+  "domain": "audyn.example.com",
+  "email": "admin@example.com"
+}
+```
+
+**Response:**
+```json
+{
+  "message": "SSL certificate enabled",
+  "config": { ... }
+}
+```
+
+### POST /api/system/ssl/upload
+
+Upload manual SSL certificate. **Admin only.**
+
+**Request:** Multipart form data
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `domain` | string | Domain name |
+| `certificate` | file | Certificate file (PEM) |
+| `private_key` | file | Private key file (PEM) |
+
+**Response:**
+```json
+{
+  "message": "SSL certificate installed",
+  "config": {
+    "enabled": true,
+    "domain": "audyn.example.com",
+    "cert_type": "manual",
+    "cert_expiry": "2027-01-10T00:00:00Z"
+  }
+}
+```
+
+### POST /api/system/ssl/disable
+
+Disable SSL and revert to HTTP. **Admin only.**
+
+**Response:**
+```json
+{
+  "message": "SSL disabled"
+}
+```
 
 ---
 

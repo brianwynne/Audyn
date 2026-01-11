@@ -12,8 +12,9 @@ This guide provides detailed instructions for installing Audyn on Ubuntu 22.04 L
 6. [Docker Deployment](#docker-deployment)
 7. [PTP Clock Configuration](#ptp-clock-configuration)
 8. [Network Configuration](#network-configuration)
-9. [Verification](#verification)
-10. [Troubleshooting](#troubleshooting)
+9. [SSL Certificate Configuration](#ssl-certificate-configuration)
+10. [Verification](#verification)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -402,6 +403,27 @@ sudo ptp4l -f /etc/ptp4l.conf -i enp1s0 -m
 
 ## Network Configuration
 
+### Dual Network Architecture
+
+Audyn is designed to operate with two network interfaces:
+
+| Interface | Purpose | Typical Configuration |
+|-----------|---------|----------------------|
+| Control Interface | Web UI, management | Corporate LAN, DHCP or static |
+| AES67 Interface | Audio multicast | Isolated audio network, static IP |
+
+This separation ensures audio traffic doesn't interfere with management traffic and provides security isolation.
+
+### Configuring via Web UI
+
+After installation, configure network interfaces through the Settings page:
+
+1. Navigate to **Settings** in the web interface
+2. Under **Network Configuration**, configure:
+   - **Control Interface**: Select the management NIC, set DHCP or static IP
+   - **AES67 Interface**: Select the audio NIC, configure IP for your audio network
+3. Click **Apply** for each interface
+
 ### Multicast Setup
 
 ```bash
@@ -438,6 +460,56 @@ sudo sysctl -w net.core.rmem_default=26214400
 # Make persistent
 echo "net.core.rmem_max=26214400" | sudo tee -a /etc/sysctl.conf
 echo "net.core.rmem_default=26214400" | sudo tee -a /etc/sysctl.conf
+```
+
+---
+
+## SSL Certificate Configuration
+
+### Option 1: Let's Encrypt (Public Servers)
+
+For servers accessible from the internet:
+
+1. Navigate to **Settings → System Configuration → SSL Certificate**
+2. Select the **Let's Encrypt** tab
+3. Enter your domain name (e.g., `audyn.example.com`)
+4. Enter your email address for notifications
+5. Click **Enable HTTPS**
+
+**Requirements:**
+- Port 80 must be accessible from the internet
+- DNS must point to your server's public IP
+- Certbot will handle automatic renewals
+
+### Option 2: Manual Upload (Private Servers)
+
+For servers not accessible from the internet:
+
+1. Obtain a certificate from your CA or create a self-signed one
+2. Navigate to **Settings → System Configuration → SSL Certificate**
+3. Select the **Manual Upload** tab
+4. Enter your domain name
+5. Upload your certificate file (.crt, .pem)
+6. Upload your private key file (.key, .pem)
+7. Click **Upload Certificate**
+
+**Creating a Self-Signed Certificate:**
+
+```bash
+# Generate private key and certificate
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout audyn.key \
+  -out audyn.crt \
+  -subj "/CN=audyn.local"
+```
+
+### Verifying SSL
+
+After enabling SSL:
+
+```bash
+# Check certificate
+openssl s_client -connect audyn.example.com:443 -servername audyn.example.com
 ```
 
 ---
