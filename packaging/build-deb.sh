@@ -92,6 +92,12 @@ mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/logrotate.d"
 cp "$DEBIAN_DIR/etc/logrotate.d/audyn" \
    "$BUILD_DIR/$PACKAGE_NAME/etc/logrotate.d/"
 
+# Copy scripts
+mkdir -p "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/scripts"
+cp "$DEBIAN_DIR/opt/audyn/scripts/"*.sh \
+   "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/scripts/"
+chmod 755 "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/scripts/"*.sh
+
 # Create empty config directory (will be populated by postinst)
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/audyn"
 
