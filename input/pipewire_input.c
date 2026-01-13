@@ -14,9 +14,9 @@
  *  Behavior:
  *      - Acquires a frame from the frame pool.
  *      - Copies interleaved float32 samples into frame->data.
- *      - If PipeWire buffer contains fewer frames than frame->sample_frames, zero-pads
- *        the remainder so consumers always see a fixed-size frame.
- *      - If PipeWire buffer contains more frames than the frame can hold, drops it.
+ *      - Sets frame->sample_frames to the actual number of samples received.
+ *      - If PipeWire delivers more samples than frame capacity, truncates to fit.
+ *      - Downstream consumers (e.g., opus_sink FIFO) handle accumulation.
  *
  *  Dependencies:
  *      - PipeWire: libpipewire-0.3, libspa-0.2
@@ -116,21 +116,20 @@ static void on_process(void *userdata)
 
     const uint32_t nframes_cap = f->sample_frames;
 
-    if (nframes_in > nframes_cap) {
-        /* Buffer is larger than our frame size: drop to keep fixed sizing simple. */
-        audyn_frame_release(f);
-        pw_stream_queue_buffer(in->stream, pw_buf);
-        return;
-    }
-
-    const size_t copy_bytes = (size_t)nframes_in * (size_t)frame_bytes;
+    /*
+     * Copy exactly the samples we received from PipeWire.
+     * If PipeWire delivers more than our frame capacity, truncate.
+     * The downstream FIFO (e.g., in opus_sink) will accumulate frames properly.
+     *
+     * This approach follows PipeWire's recommendation: process whatever
+     * buffer size PipeWire delivers, don't enforce fixed sizes here.
+     */
+    const uint32_t nframes_to_copy = (nframes_in > nframes_cap) ? nframes_cap : nframes_in;
+    const size_t copy_bytes = (size_t)nframes_to_copy * (size_t)frame_bytes;
     memcpy(f->data, buf->datas[0].data, copy_bytes);
 
-    /* Zero-pad remainder, if any, so consumers always see a fixed-size frame. */
-    if (nframes_in < nframes_cap) {
-        const size_t pad_bytes = (size_t)(nframes_cap - nframes_in) * (size_t)frame_bytes;
-        memset((unsigned char*)f->data + copy_bytes, 0, pad_bytes);
-    }
+    /* Set actual sample count - downstream consumers use this value */
+    f->sample_frames = nframes_to_copy;
 
     if (!audyn_audio_queue_push(in->q, f)) {
         /* Queue full: release frame. */
