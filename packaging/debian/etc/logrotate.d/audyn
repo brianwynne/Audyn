@@ -1,0 +1,13 @@
+/var/log/audyn/*.log {
+    monthly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 audyn audyn
+    sharedscripts
+    postrotate
+        systemctl reload audyn-web.service > /dev/null 2>&1 || true
+    endscript
+}

@@ -1,6 +1,6 @@
 # Build artifacts
 *.o
-audyn
+/audyn
 
 # Editor files
 *.swp
