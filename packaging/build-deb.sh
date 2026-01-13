@@ -87,6 +87,11 @@ mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/nginx/sites-available"
 cp "$DEBIAN_DIR/etc/nginx/sites-available/audyn" \
    "$BUILD_DIR/$PACKAGE_NAME/etc/nginx/sites-available/"
 
+# Copy logrotate config
+mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/logrotate.d"
+cp "$DEBIAN_DIR/etc/logrotate.d/audyn" \
+   "$BUILD_DIR/$PACKAGE_NAME/etc/logrotate.d/"
+
 # Create empty config directory (will be populated by postinst)
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/audyn"
 

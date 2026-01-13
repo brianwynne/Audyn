@@ -1,1 +1,2 @@
 /etc/nginx/sites-available/audyn
+/etc/logrotate.d/audyn

@@ -91,6 +91,14 @@ class AES67InterfaceConfig(BaseModel):
     network: Optional[NetworkConfig] = None  # Network settings for that interface
 
 
+class LogRotationConfig(BaseModel):
+    """Log rotation configuration."""
+    frequency: str = "monthly"  # daily, weekly, monthly
+    rotate_count: int = 12  # Number of rotated logs to keep
+    compress: bool = True  # Compress rotated logs
+    max_size: Optional[str] = None  # Optional size-based rotation (e.g., "100M")
+
+
 # ============ In-memory state ============
 
 _system_config: Optional[SystemConfig] = None
@@ -1397,3 +1405,160 @@ async def set_aes67_config(
         "config": _aes67_interface_config,
         "warnings": warnings if warnings else None
     }
+
+
+# ============ Log Rotation Configuration ============
+
+LOGROTATE_CONFIG_PATH = "/etc/logrotate.d/audyn"
+
+def get_current_logrotate_config() -> LogRotationConfig:
+    """Parse current logrotate configuration."""
+    config = LogRotationConfig()
+
+    try:
+        if not os.path.exists(LOGROTATE_CONFIG_PATH):
+            return config
+
+        with open(LOGROTATE_CONFIG_PATH, 'r') as f:
+            content = f.read()
+
+        # Parse frequency
+        if 'daily' in content:
+            config.frequency = 'daily'
+        elif 'weekly' in content:
+            config.frequency = 'weekly'
+        else:
+            config.frequency = 'monthly'
+
+        # Parse rotate count
+        import re
+        rotate_match = re.search(r'rotate\s+(\d+)', content)
+        if rotate_match:
+            config.rotate_count = int(rotate_match.group(1))
+
+        # Parse compress
+        config.compress = 'compress' in content and 'nocompress' not in content
+
+        # Parse size
+        size_match = re.search(r'size\s+(\S+)', content)
+        if size_match:
+            config.max_size = size_match.group(1)
+
+    except Exception as e:
+        logger.error(f"Failed to parse logrotate config: {e}")
+
+    return config
+
+
+def update_logrotate_config(config: LogRotationConfig) -> tuple[bool, str]:
+    """Update the logrotate configuration file."""
+    try:
+        # Build logrotate config
+        size_line = f"\n    size {config.max_size}" if config.max_size else ""
+        compress_lines = "compress\n    delaycompress" if config.compress else "nocompress"
+
+        logrotate_content = f"""/var/log/audyn/*.log {{
+    {config.frequency}
+    rotate {config.rotate_count}
+    {compress_lines}
+    missingok
+    notifempty
+    create 640 audyn audyn{size_line}
+    sharedscripts
+    postrotate
+        systemctl reload audyn-web.service > /dev/null 2>&1 || true
+    endscript
+}}
+"""
+
+        with open(LOGROTATE_CONFIG_PATH, 'w') as f:
+            f.write(logrotate_content)
+
+        logger.info(f"Logrotate config updated: frequency={config.frequency}, rotate={config.rotate_count}")
+        return True, "Log rotation configuration updated"
+
+    except PermissionError:
+        return False, "Permission denied. Cannot write to logrotate config."
+    except Exception as e:
+        logger.error(f"Failed to update logrotate config: {e}")
+        return False, str(e)
+
+
+@router.get("/logrotate", response_model=LogRotationConfig)
+async def get_logrotate_config(user: User = Depends(get_current_user)):
+    """Get current log rotation configuration."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return get_current_logrotate_config()
+
+
+@router.post("/logrotate")
+async def set_logrotate_config(
+    config: LogRotationConfig,
+    user: User = Depends(get_current_user)
+):
+    """Update log rotation configuration."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Validate frequency
+    if config.frequency not in ['daily', 'weekly', 'monthly']:
+        raise HTTPException(
+            status_code=400,
+            detail="Frequency must be 'daily', 'weekly', or 'monthly'"
+        )
+
+    # Validate rotate count
+    if config.rotate_count < 1 or config.rotate_count > 365:
+        raise HTTPException(
+            status_code=400,
+            detail="Rotate count must be between 1 and 365"
+        )
+
+    # Validate max_size format if provided
+    if config.max_size:
+        import re
+        if not re.match(r'^\d+[kKmMgG]?$', config.max_size):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid size format. Use format like '100M', '1G', '500k'"
+            )
+
+    success, message = update_logrotate_config(config)
+
+    if success:
+        logger.info(f"Log rotation config updated by {user.email}")
+        return {
+            "message": message,
+            "config": config
+        }
+    else:
+        raise HTTPException(status_code=500, detail=message)
+
+
+@router.post("/logrotate/force")
+async def force_log_rotation(user: User = Depends(get_current_user)):
+    """Force immediate log rotation."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        result = subprocess.run(
+            ["logrotate", "-f", LOGROTATE_CONFIG_PATH],
+            capture_output=True, text=True, timeout=30
+        )
+
+        if result.returncode == 0:
+            logger.info(f"Log rotation forced by {user.email}")
+            return {"message": "Log rotation completed successfully"}
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=result.stderr or "Log rotation failed"
+            )
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Log rotation timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

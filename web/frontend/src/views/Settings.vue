@@ -579,6 +579,89 @@
           </v-card-text>
         </v-card>
       </v-col>
+
+      <!-- Log Rotation -->
+      <v-col cols="12" md="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-file-rotate-left" class="mr-2" color="orange" />
+            Log Rotation
+          </v-card-title>
+          <v-card-text class="pt-4">
+            <v-row dense>
+              <v-col cols="12" sm="6">
+                <v-select
+                  v-model="logRotation.frequency"
+                  label="Rotation Frequency"
+                  :items="[
+                    { title: 'Daily', value: 'daily' },
+                    { title: 'Weekly', value: 'weekly' },
+                    { title: 'Monthly', value: 'monthly' }
+                  ]"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+              <v-col cols="12" sm="6">
+                <v-text-field
+                  v-model.number="logRotation.rotate_count"
+                  label="Logs to Keep"
+                  type="number"
+                  min="1"
+                  max="365"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </v-row>
+            <v-row dense class="mt-3">
+              <v-col cols="12" sm="6">
+                <v-text-field
+                  v-model="logRotation.max_size"
+                  label="Max Size (optional)"
+                  placeholder="100M"
+                  hint="e.g., 100M, 1G"
+                  variant="outlined"
+                  density="compact"
+                  persistent-hint
+                />
+              </v-col>
+              <v-col cols="12" sm="6" class="d-flex align-center">
+                <v-checkbox
+                  v-model="logRotation.compress"
+                  label="Compress rotated logs"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </v-row>
+          </v-card-text>
+          <v-card-actions class="px-4 pb-4">
+            <v-btn
+              color="primary"
+              variant="tonal"
+              size="small"
+              :loading="logRotationSaving"
+              @click="saveLogRotation"
+            >
+              Save Log Settings
+            </v-btn>
+            <v-btn
+              color="secondary"
+              variant="text"
+              size="small"
+              :loading="logRotationForcing"
+              @click="forceLogRotation"
+            >
+              Rotate Now
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-col>
     </v-row>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -764,6 +847,16 @@ const authConfig = ref({
 // Password visibility toggles
 const showClientSecret = ref(false)
 const showBreakglass = ref(false)
+
+// Log rotation config
+const logRotation = ref({
+  frequency: 'monthly',
+  rotate_count: 12,
+  compress: true,
+  max_size: null
+})
+const logRotationSaving = ref(false)
+const logRotationForcing = ref(false)
 
 // Layout options
 const layouts = [
@@ -1207,6 +1300,76 @@ async function disableSSL() {
   }
 }
 
+async function fetchLogRotation() {
+  try {
+    const response = await fetch('/api/system/logrotate')
+    if (response.ok) {
+      const data = await response.json()
+      logRotation.value = {
+        frequency: data.frequency || 'monthly',
+        rotate_count: data.rotate_count || 12,
+        compress: data.compress !== false,
+        max_size: data.max_size || null
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch log rotation config:', err)
+  }
+}
+
+async function saveLogRotation() {
+  logRotationSaving.value = true
+  try {
+    const response = await fetch('/api/system/logrotate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        frequency: logRotation.value.frequency,
+        rotate_count: logRotation.value.rotate_count,
+        compress: logRotation.value.compress,
+        max_size: logRotation.value.max_size || null
+      })
+    })
+
+    if (response.ok) {
+      alert('Log rotation settings saved')
+    } else {
+      const error = await response.json()
+      alert(`Failed to save log rotation: ${error.detail || 'Unknown error'}`)
+    }
+  } catch (err) {
+    console.error('Failed to save log rotation:', err)
+    alert('Failed to save log rotation. Check console for details.')
+  } finally {
+    logRotationSaving.value = false
+  }
+}
+
+async function forceLogRotation() {
+  if (!confirm('Force immediate log rotation?')) {
+    return
+  }
+
+  logRotationForcing.value = true
+  try {
+    const response = await fetch('/api/system/logrotate/force', {
+      method: 'POST'
+    })
+
+    if (response.ok) {
+      alert('Log rotation completed successfully')
+    } else {
+      const error = await response.json()
+      alert(`Failed to rotate logs: ${error.detail || 'Unknown error'}`)
+    }
+  } catch (err) {
+    console.error('Failed to force log rotation:', err)
+    alert('Failed to rotate logs. Check console for details.')
+  } finally {
+    logRotationForcing.value = false
+  }
+}
+
 onMounted(async () => {
   // Fetch config from backend first, then copy to local state
   await captureStore.fetchConfig()
@@ -1221,5 +1384,6 @@ onMounted(async () => {
   fetchTimezones()
   fetchSystemConfig()
   fetchSSLConfig()
+  fetchLogRotation()
 })
 </script>
