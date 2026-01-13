@@ -29,11 +29,8 @@ router = APIRouter()
 # In-memory recorder storage (would be replaced by actual process management)
 MAX_RECORDERS = 6
 
-# Default archive root - use local path for development
-DEFAULT_ARCHIVE_BASE = os.getenv(
-    "AUDYN_ARCHIVE_ROOT",
-    os.path.expanduser("~/audyn-archive")
-)
+# Default archive root - use system path in production
+DEFAULT_ARCHIVE_BASE = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn/archive")
 
 
 def create_default_recorder(id: int) -> Recorder:

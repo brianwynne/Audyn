@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Default archive root - can be overridden by persisted config or env var
-_DEFAULT_ARCHIVE_ROOT = os.path.expanduser("~/audyn-archive")
+_DEFAULT_ARCHIVE_ROOT = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn/archive")
 
 
 def get_archive_root() -> str:

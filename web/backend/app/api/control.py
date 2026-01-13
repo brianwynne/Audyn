@@ -121,7 +121,7 @@ def _load_config_from_store():
     else:
         # Initialize with sensible defaults
         _current_config = CaptureConfig(
-            archive_root=os.path.expanduser("~/audyn-archive")
+            archive_root=os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn/archive")
         )
         # Save defaults to file
         save_global_config(_current_config.model_dump())

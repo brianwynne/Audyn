@@ -43,3 +43,4 @@ venv/
 # Node.js
 node_modules/
 dist/
+test-archive/

@@ -41,7 +41,7 @@ case "$1" in
         chmod 750 "$AUDYN_HOME"
         chmod 750 "$AUDYN_ARCHIVE"
         chmod 750 "$AUDYN_LOG"
-        chmod 755 "$AUDYN_CONFIG"
+        chmod 775 "$AUDYN_CONFIG"
 
         # Create default configuration if not exists
         if [ ! -f "$AUDYN_CONFIG/global.json" ]; then

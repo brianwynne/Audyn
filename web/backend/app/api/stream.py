@@ -34,7 +34,7 @@ def get_archive_root() -> str:
     config = load_global_config()
     if config and config.get("archive_root"):
         return config["archive_root"]
-    return os.getenv("AUDYN_ARCHIVE_ROOT", os.path.expanduser("~/audyn-archive"))
+    return os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn/archive")
 
 # Configuration for growing file handling
 GROWING_FILE_POLL_INTERVAL = 0.1  # 100ms polling for new data

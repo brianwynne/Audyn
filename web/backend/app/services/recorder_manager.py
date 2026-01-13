@@ -82,7 +82,7 @@ class RecorderManager:
         archive_layout = "dailydir"
         archive_period = 3600
         archive_clock = "localtime"
-        archive_base = os.path.expanduser("~/audyn-archive")
+        archive_base = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn/archive")
 
         global_cfg = get_global_config()
         if global_cfg:
@@ -143,7 +143,7 @@ class RecorderManager:
                     return False
 
             # Use global archive root from Settings, fall back to default
-            archive_base = os.path.expanduser("~/audyn-archive")
+            archive_base = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn/archive")
             global_cfg = get_global_config()
             if global_cfg and global_cfg.archive_root:
                 archive_base = global_cfg.archive_root

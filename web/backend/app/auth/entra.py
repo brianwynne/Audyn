@@ -65,8 +65,8 @@ class TokenResponse(BaseModel):
     user: User
 
 
-# Development mode flag
-DEV_MODE = os.getenv("AUDYN_DEV_MODE", "true").lower() == "true"
+# Development mode flag - defaults to false for production security
+DEV_MODE = os.getenv("AUDYN_DEV_MODE", "false").lower() == "true"
 
 # Dev mode user type: "admin" or "user" (set via query param or env)
 DEV_USER_TYPE = os.getenv("AUDYN_DEV_USER_TYPE", "admin")

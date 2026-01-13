@@ -14,6 +14,7 @@ Environment="AUDYN_CONFIG_DIR=/etc/audyn"
 Environment="AUDYN_ARCHIVE_ROOT=/var/lib/audyn/archive"
 Environment="AUDYN_BIN=/usr/bin/audyn"
 Environment="AUDYN_LOG_DIR=/var/log/audyn"
+Environment="AUDYN_DEV_MODE=false"
 
 # Working directory
 WorkingDirectory=/opt/audyn/backend
