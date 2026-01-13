@@ -23,6 +23,9 @@ case "$1" in
         # Remove log directory
         rm -rf /var/log/audyn
 
+        # Remove Python venv and any remaining files in /opt/audyn
+        rm -rf /opt/audyn
+
         # Note: /var/lib/audyn/archive is NOT removed to preserve recordings
         echo ""
         echo "Note: Archive directory /var/lib/audyn/archive was preserved."
