@@ -55,6 +55,18 @@ extern "C" {
 typedef struct audyn_opus_sink audyn_opus_sink_t;
 
 /*
+ * Opus sink statistics.
+ */
+typedef struct audyn_opus_stats
+{
+    uint64_t frames_in;         /* Total input frames received */
+    uint64_t frames_encoded;    /* Total frames encoded (may differ due to padding) */
+    uint64_t packets_encoded;   /* Total Opus packets written */
+    uint64_t bytes_encoded;     /* Total compressed bytes written */
+    uint64_t fifo_overflows;    /* FIFO overflow events (data dropped) */
+} audyn_opus_stats_t;
+
+/*
  * Opus application mode.
  *
  * Mirrors libopus application choices without requiring opus headers.
@@ -77,6 +89,11 @@ typedef enum audyn_opus_application_e
  *   - vbr: 1
  *   - complexity: 5
  *   - application: AUDYN_OPUS_APP_AUDIO
+ *
+ * Notes:
+ *   - Bitrate is clamped to valid range (6000-510000 bps)
+ *   - Complexity is clamped to 0-10
+ *   - Invalid application mode defaults to AUDYN_OPUS_APP_AUDIO
  */
 typedef struct audyn_opus_cfg
 {
@@ -120,11 +137,13 @@ audyn_opus_sink_create(const char *path, const audyn_opus_cfg_t *cfg);
  *
  * Returns:
  *      0 on success
- *     -1 on error (encoder or I/O failure)
+ *     -1 on error (encoder or I/O failure, FIFO overflow)
  *
  * Notes:
  *      - The sink may buffer packets until an Ogg page is ready to flush.
  *      - The caller retains ownership of interleaved_f32.
+ *      - Internal FIFO is limited to ~10 seconds at 48kHz to prevent runaway memory.
+ *      - Errors are logged via the project's logging system.
  */
 int
 audyn_opus_sink_write(audyn_opus_sink_t *sink,
@@ -160,6 +179,17 @@ audyn_opus_sink_close(audyn_opus_sink_t *sink);
  */
 void
 audyn_opus_sink_destroy(audyn_opus_sink_t *sink);
+
+
+/*
+ * Get encoding statistics.
+ *
+ * Parameters:
+ *      sink  - sink instance (must not be NULL)
+ *      stats - output statistics structure (must not be NULL)
+ */
+void
+audyn_opus_sink_get_stats(const audyn_opus_sink_t *sink, audyn_opus_stats_t *stats);
 
 #ifdef __cplusplus
 }

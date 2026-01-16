@@ -43,6 +43,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Maximum reasonable sample rate */
+#define PW_MAX_SAMPLE_RATE 384000
+
+/* Maximum reasonable channel count */
+#define PW_MAX_CHANNELS 32
+
 /* PipeWire init/deinit should be process-wide. We keep a simple refcount. */
 static _Atomic int g_pw_refcnt = 0;
 
@@ -75,6 +81,15 @@ struct audyn_pw_input {
 
     pthread_t thread;
     int thread_started;
+    int running;                /* 1 if loop is running */
+
+    /* Statistics - atomic for RT-safe updates in process callback */
+    _Atomic uint64_t frames_captured;   /* Total frames successfully captured */
+    _Atomic uint64_t callbacks;         /* Total process callbacks */
+    _Atomic uint64_t drops_pool;        /* Drops due to pool exhaustion */
+    _Atomic uint64_t drops_queue;       /* Drops due to queue full */
+    _Atomic uint64_t drops_empty;       /* Drops due to empty/invalid buffer */
+    _Atomic uint64_t truncations;       /* Times we truncated oversized buffer */
 };
 
 static void on_process(void *userdata)
@@ -82,11 +97,15 @@ static void on_process(void *userdata)
     audyn_pw_input_t *in = (audyn_pw_input_t*)userdata;
     if (!in || !in->stream) return;
 
+    /* Count all callbacks for diagnostics */
+    atomic_fetch_add_explicit(&in->callbacks, 1, memory_order_relaxed);
+
     struct pw_buffer *pw_buf = pw_stream_dequeue_buffer(in->stream);
     if (!pw_buf) return;
 
     struct spa_buffer *buf = pw_buf->buffer;
     if (!buf || buf->n_datas < 1 || !buf->datas[0].data || !buf->datas[0].chunk) {
+        atomic_fetch_add_explicit(&in->drops_empty, 1, memory_order_relaxed);
         pw_stream_queue_buffer(in->stream, pw_buf);
         return;
     }
@@ -96,6 +115,7 @@ static void on_process(void *userdata)
     const uint32_t nframes_in = frame_bytes ? (bytes / frame_bytes) : 0;
 
     if (nframes_in == 0) {
+        atomic_fetch_add_explicit(&in->drops_empty, 1, memory_order_relaxed);
         pw_stream_queue_buffer(in->stream, pw_buf);
         return;
     }
@@ -103,6 +123,7 @@ static void on_process(void *userdata)
     audyn_audio_frame_t *f = audyn_frame_acquire(in->pool);
     if (!f) {
         /* Pool exhausted: drop this buffer. */
+        atomic_fetch_add_explicit(&in->drops_pool, 1, memory_order_relaxed);
         pw_stream_queue_buffer(in->stream, pw_buf);
         return;
     }
@@ -110,6 +131,7 @@ static void on_process(void *userdata)
     /* Validate channel agreement. */
     if ((uint32_t)f->channels != in->channels) {
         audyn_frame_release(f);
+        atomic_fetch_add_explicit(&in->drops_empty, 1, memory_order_relaxed);
         pw_stream_queue_buffer(in->stream, pw_buf);
         return;
     }
@@ -125,6 +147,12 @@ static void on_process(void *userdata)
      * buffer size PipeWire delivers, don't enforce fixed sizes here.
      */
     const uint32_t nframes_to_copy = (nframes_in > nframes_cap) ? nframes_cap : nframes_in;
+
+    /* Track truncations */
+    if (nframes_in > nframes_cap) {
+        atomic_fetch_add_explicit(&in->truncations, 1, memory_order_relaxed);
+    }
+
     const size_t copy_bytes = (size_t)nframes_to_copy * (size_t)frame_bytes;
     memcpy(f->data, buf->datas[0].data, copy_bytes);
 
@@ -133,7 +161,11 @@ static void on_process(void *userdata)
 
     if (!audyn_audio_queue_push(in->q, f)) {
         /* Queue full: release frame. */
+        atomic_fetch_add_explicit(&in->drops_queue, 1, memory_order_relaxed);
         audyn_frame_release(f);
+    } else {
+        /* Successfully captured */
+        atomic_fetch_add_explicit(&in->frames_captured, nframes_to_copy, memory_order_relaxed);
     }
 
     pw_stream_queue_buffer(in->stream, pw_buf);
@@ -157,16 +189,24 @@ audyn_pw_input_t *audyn_pw_input_create(audyn_frame_pool_t *pool,
                                         uint32_t sample_rate,
                                         uint32_t channels)
 {
-    if (!pool || !queue || sample_rate == 0 || channels == 0)
+    if (!pool || !queue) {
+        LOG_ERROR("PW: NULL pool or queue");
         return NULL;
-
-    if (channels > 0xFFFFu) /* frame uses uint16_t channels */
+    }
+    if (sample_rate == 0 || sample_rate > PW_MAX_SAMPLE_RATE) {
+        LOG_ERROR("PW: Invalid sample rate %u (must be 1-%d)", sample_rate, PW_MAX_SAMPLE_RATE);
         return NULL;
+    }
+    if (channels == 0 || channels > PW_MAX_CHANNELS) {
+        LOG_ERROR("PW: Invalid channel count %u (must be 1-%d)", channels, PW_MAX_CHANNELS);
+        return NULL;
+    }
 
     pw_ref_init();
 
     audyn_pw_input_t *in = (audyn_pw_input_t*)calloc(1, sizeof(*in));
     if (!in) {
+        LOG_ERROR("PW: Failed to allocate input structure");
         pw_ref_deinit();
         return NULL;
     }
@@ -176,11 +216,25 @@ audyn_pw_input_t *audyn_pw_input_create(audyn_frame_pool_t *pool,
     in->rate = sample_rate;
     in->channels = channels;
 
+    /* Initialize atomic counters */
+    atomic_init(&in->frames_captured, 0);
+    atomic_init(&in->callbacks, 0);
+    atomic_init(&in->drops_pool, 0);
+    atomic_init(&in->drops_queue, 0);
+    atomic_init(&in->drops_empty, 0);
+    atomic_init(&in->truncations, 0);
+
     in->loop = pw_main_loop_new(NULL);
-    if (!in->loop) goto fail;
+    if (!in->loop) {
+        LOG_ERROR("PW: Failed to create main loop");
+        goto fail;
+    }
 
     in->ctx = pw_context_new(pw_main_loop_get_loop(in->loop), NULL, 0);
-    if (!in->ctx) goto fail;
+    if (!in->ctx) {
+        LOG_ERROR("PW: Failed to create context");
+        goto fail;
+    }
 
     in->stream = pw_stream_new_simple(
         pw_main_loop_get_loop(in->loop),
@@ -194,7 +248,10 @@ audyn_pw_input_t *audyn_pw_input_create(audyn_frame_pool_t *pool,
         &stream_events,
         in
     );
-    if (!in->stream) goto fail;
+    if (!in->stream) {
+        LOG_ERROR("PW: Failed to create stream");
+        goto fail;
+    }
 
     struct spa_audio_info_raw info;
     memset(&info, 0, sizeof(info));
@@ -217,10 +274,11 @@ audyn_pw_input_t *audyn_pw_input_create(audyn_frame_pool_t *pool,
         params, 1
     );
     if (rc < 0) {
-        LOG_ERROR("pipewire_input: pw_stream_connect failed (%d)", rc);
+        LOG_ERROR("PW: pw_stream_connect failed (%d)", rc);
         goto fail;
     }
 
+    LOG_INFO("PW: Created input - %uHz %uch F32", sample_rate, channels);
     return in;
 
 fail:
@@ -230,12 +288,23 @@ fail:
 
 int audyn_pw_input_start(audyn_pw_input_t *in)
 {
-    if (!in || in->thread_started) return -1;
-
-    if (pthread_create(&in->thread, NULL, pw_thread_main, in) != 0)
+    if (!in) {
+        LOG_ERROR("PW: NULL input");
         return -1;
+    }
+    if (in->thread_started) {
+        LOG_ERROR("PW: Already started");
+        return -1;
+    }
+
+    if (pthread_create(&in->thread, NULL, pw_thread_main, in) != 0) {
+        LOG_ERROR("PW: Failed to create thread");
+        return -1;
+    }
 
     in->thread_started = 1;
+    in->running = 1;
+    LOG_INFO("PW: Started capture");
     return 0;
 }
 
@@ -249,6 +318,16 @@ void audyn_pw_input_stop(audyn_pw_input_t *in)
     if (in->thread_started) {
         pthread_join(in->thread, NULL);
         in->thread_started = 0;
+        in->running = 0;
+
+        /* Log final statistics */
+        LOG_DEBUG("PW: Stopped - captured=%lu callbacks=%lu drops_pool=%lu drops_queue=%lu drops_empty=%lu truncations=%lu",
+                  (unsigned long)atomic_load(&in->frames_captured),
+                  (unsigned long)atomic_load(&in->callbacks),
+                  (unsigned long)atomic_load(&in->drops_pool),
+                  (unsigned long)atomic_load(&in->drops_queue),
+                  (unsigned long)atomic_load(&in->drops_empty),
+                  (unsigned long)atomic_load(&in->truncations));
     }
 }
 
@@ -264,4 +343,22 @@ void audyn_pw_input_destroy(audyn_pw_input_t *in)
 
     free(in);
     pw_ref_deinit();
+}
+
+int audyn_pw_input_is_running(const audyn_pw_input_t *in)
+{
+    if (!in) return 0;
+    return in->running;
+}
+
+void audyn_pw_input_get_stats(const audyn_pw_input_t *in, audyn_pw_stats_t *stats)
+{
+    if (!in || !stats) return;
+
+    stats->frames_captured = atomic_load_explicit(&in->frames_captured, memory_order_relaxed);
+    stats->callbacks = atomic_load_explicit(&in->callbacks, memory_order_relaxed);
+    stats->drops_pool = atomic_load_explicit(&in->drops_pool, memory_order_relaxed);
+    stats->drops_queue = atomic_load_explicit(&in->drops_queue, memory_order_relaxed);
+    stats->drops_empty = atomic_load_explicit(&in->drops_empty, memory_order_relaxed);
+    stats->truncations = atomic_load_explicit(&in->truncations, memory_order_relaxed);
 }

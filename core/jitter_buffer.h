@@ -11,6 +11,7 @@
  *        1. Reorders packets that arrive out-of-sequence
  *        2. Handles packet loss gracefully (with silence insertion)
  *        3. Provides timing-correct playout based on RTP timestamps
+ *        4. Thread-safe: insert() and get() can be called from different threads
  *
  *      For AES67:
  *        - Packets are 1ms nominal (48 samples @ 48kHz)
@@ -140,13 +141,17 @@ void audyn_jb_reset(audyn_jitter_buffer_t *jb);
 
 /*
  * Get jitter buffer statistics.
+ *
+ * Thread-safe: acquires internal lock.
  */
-void audyn_jb_get_stats(const audyn_jitter_buffer_t *jb, audyn_jb_stats_t *stats);
+void audyn_jb_get_stats(audyn_jitter_buffer_t *jb, audyn_jb_stats_t *stats);
 
 /*
  * Get current buffer depth in packets.
+ *
+ * Thread-safe: acquires internal lock.
  */
-int audyn_jb_depth(const audyn_jitter_buffer_t *jb);
+int audyn_jb_depth(audyn_jitter_buffer_t *jb);
 
 #ifdef __cplusplus
 }

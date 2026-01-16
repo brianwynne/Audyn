@@ -48,14 +48,19 @@ audyn_level_meter_t *audyn_level_meter_create(
     uint32_t output_interval_ms)
 {
     if (channels == 0 || channels > AUDYN_METER_MAX_CHANNELS) {
+        LOG_ERROR("level_meter: invalid channels %u (must be 1-%u)",
+                  channels, AUDYN_METER_MAX_CHANNELS);
         return NULL;
     }
-    if (sample_rate == 0) {
+    if (sample_rate == 0 || sample_rate > AUDYN_METER_MAX_SAMPLE_RATE) {
+        LOG_ERROR("level_meter: invalid sample_rate %u (must be 1-%u)",
+                  sample_rate, AUDYN_METER_MAX_SAMPLE_RATE);
         return NULL;
     }
 
     audyn_level_meter_t *meter = calloc(1, sizeof(audyn_level_meter_t));
     if (!meter) {
+        LOG_ERROR("level_meter: failed to allocate structure");
         return NULL;
     }
 
@@ -73,11 +78,20 @@ audyn_level_meter_t *audyn_level_meter_create(
         meter->levels[i].clipping = 0;
     }
 
+    LOG_DEBUG("level_meter: created (channels=%u rate=%u interval=%ums)",
+              channels, sample_rate, meter->output_interval_ms);
+
     return meter;
 }
 
 void audyn_level_meter_destroy(audyn_level_meter_t *meter)
 {
+    if (!meter) return;
+
+    LOG_DEBUG("level_meter: destroyed (frames=%lu outputs=%lu)",
+              (unsigned long)meter->frames_processed,
+              (unsigned long)meter->outputs_sent);
+
     free(meter);
 }
 
@@ -166,7 +180,7 @@ int audyn_level_meter_process(
         clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t now_ms = (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
-        if (now_ms - meter->last_output_samples >= meter->output_interval_ms) {
+        if (now_ms - meter->last_output_time_ms >= meter->output_interval_ms) {
             /* Output silence levels */
             for (uint32_t ch = 0; ch < meter->channels; ch++) {
                 meter->levels[ch].rms_db = MIN_DB;
@@ -176,7 +190,8 @@ int audyn_level_meter_process(
                 meter->levels[ch].clipping = 0;
             }
             output_json(meter);
-            meter->last_output_samples = now_ms;
+            meter->last_output_time_ms = now_ms;
+            meter->outputs_sent++;
             return 1;
         }
         return 0;
@@ -206,6 +221,7 @@ int audyn_level_meter_process(
     }
 
     meter->sample_count += frame->sample_frames;
+    meter->frames_processed++;
 
     /* Check if we should output levels */
     uint64_t output_samples = (uint64_t)meter->sample_rate *
@@ -222,6 +238,7 @@ int audyn_level_meter_process(
         }
         meter->last_output_samples = meter->sample_count;
         meter->sample_count = 0;
+        meter->outputs_sent++;
 
         return 1;
     }
@@ -237,6 +254,7 @@ void audyn_level_meter_flush(audyn_level_meter_t *meter)
 
     compute_levels(meter);
     output_json(meter);
+    meter->outputs_sent++;
 
     /* Reset */
     for (uint32_t ch = 0; ch < meter->channels; ch++) {
@@ -257,4 +275,18 @@ void audyn_level_meter_get_levels(
     compute_levels(meter);
     memcpy(out_levels, meter->levels,
            meter->channels * sizeof(audyn_channel_level_t));
+}
+
+void audyn_level_meter_get_stats(const audyn_level_meter_t *meter,
+                                  audyn_meter_stats_t *stats)
+{
+    if (!stats) return;
+
+    if (!meter) {
+        memset(stats, 0, sizeof(*stats));
+        return;
+    }
+
+    stats->frames_processed = meter->frames_processed;
+    stats->outputs_sent = meter->outputs_sent;
 }

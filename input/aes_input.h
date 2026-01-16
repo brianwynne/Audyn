@@ -46,6 +46,8 @@
 
 #include <stdint.h>
 
+#include <stddef.h>  /* for size_t */
+
 #include "frame_pool.h"
 #include "audio_queue.h"
 #include "ptp_clock.h"
@@ -53,6 +55,20 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * AES67 input statistics.
+ *
+ * All counters can be read while capture is running.
+ */
+typedef struct audyn_aes_stats {
+    uint64_t packets_rx;              /* Total RTP packets received */
+    uint64_t packets_dropped;         /* Packets dropped (invalid RTP, wrong PT, etc.) */
+    uint64_t discontinuities;         /* RTP sequence discontinuities detected */
+    uint64_t frames_pushed;           /* Frames successfully pushed to queue */
+    uint64_t frames_dropped_pool;     /* Drops due to frame pool exhaustion */
+    uint64_t frames_dropped_queue;    /* Drops due to audio queue full */
+} audyn_aes_stats_t;
 
 typedef struct audyn_aes_input_cfg {
     const char *source_ip;
@@ -78,7 +94,44 @@ audyn_aes_input_create(audyn_frame_pool_t *pool,
 int audyn_aes_input_start(audyn_aes_input_t *in);
 void audyn_aes_input_stop(audyn_aes_input_t *in);
 void audyn_aes_input_destroy(audyn_aes_input_t *in);
-const char *audyn_aes_input_last_error(audyn_aes_input_t *in);
+
+/*
+ * Check if input is currently running.
+ *
+ * Returns 1 if running, 0 if stopped or NULL.
+ */
+int audyn_aes_input_is_running(const audyn_aes_input_t *in);
+
+/*
+ * Get last error message (thread-safe version).
+ *
+ * Copies error message to caller's buffer.
+ *
+ * Parameters:
+ *   in     - input instance
+ *   buf    - output buffer
+ *   buflen - buffer size
+ */
+void audyn_aes_input_get_last_error(const audyn_aes_input_t *in, char *buf, size_t buflen);
+
+/*
+ * Get last error message.
+ *
+ * DEPRECATED: Use audyn_aes_input_get_last_error() for thread-safe access.
+ * This function returns a pointer to internal storage that may change.
+ */
+const char *audyn_aes_input_last_error(const audyn_aes_input_t *in);
+
+/*
+ * Get input statistics.
+ *
+ * Safe to call while input is running.
+ *
+ * Parameters:
+ *   in    - input instance (must not be NULL)
+ *   stats - output statistics structure (must not be NULL)
+ */
+void audyn_aes_input_get_stats(const audyn_aes_input_t *in, audyn_aes_stats_t *stats);
 
 /*
  * Set the PTP clock for packet timestamping.

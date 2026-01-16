@@ -56,6 +56,19 @@
 #include "archive_policy.h"
 #include "level_meter.h"
 
+/* -------- Limits -------- */
+
+/* Sample rate limits (must match worker.h) */
+#define AUDYN_MAX_SAMPLE_RATE 384000
+
+/* Opus bitrate limits (must match opus_sink.c) */
+#define AUDYN_CLI_BITRATE_MIN 6000
+#define AUDYN_CLI_BITRATE_MAX 510000
+
+/* Levels interval limits (ms) */
+#define AUDYN_LEVELS_INTERVAL_MIN 10
+#define AUDYN_LEVELS_INTERVAL_MAX 5000
+
 /* -------- Types -------- */
 
 typedef enum input_source {
@@ -133,10 +146,10 @@ static void usage(const char *argv0)
         "  --ptp-interface <if>   Discover PHC from network interface (e.g., eth0)\n"
         "  --ptp-software         Use software PTP (CLOCK_REALTIME via linuxptp)\n\n"
         "Audio Parameters:\n"
-        "  -r <rate>              Sample rate (default 48000)\n"
+        "  -r <rate>              Sample rate 1-384000 Hz (default 48000)\n"
         "  -c <channels>          Channels: 1 or 2 (default 2)\n\n"
         "Opus Options (when output is .opus):\n"
-        "  --bitrate <bps>        Target bitrate (default 128000)\n"
+        "  --bitrate <bps>        Target bitrate 6000-510000 (default 128000)\n"
         "  --vbr                  Enable VBR (default)\n"
         "  --cbr                  Use CBR instead of VBR\n"
         "  --complexity <n>       Encoder complexity 0-10 (default 5)\n\n"
@@ -228,6 +241,9 @@ typedef struct worker_ctx {
 
     /* Archive policy (may be NULL for single-file mode) */
     audyn_archive_policy_t *archive;
+
+    /* Archive clock source (valid when archive != NULL) */
+    audyn_archive_clock_t archive_clock;
 
     /* Single-file mode path (NULL if using archive) */
     const char *single_file_path;
@@ -368,14 +384,12 @@ static int write_to_sink(worker_ctx_t *ctx, audyn_audio_frame_t *frame)
 static uint64_t get_current_time_ns(worker_ctx_t *ctx)
 {
     if (ctx->archive) {
-        audyn_archive_clock_t clock_src = AUDYN_ARCHIVE_CLOCK_LOCALTIME;
-        /* Get clock source from archive config - we need to track this */
-        /* For now, use system time; PTP TAI would come from frames */
+        /* Use configured clock source from archive config */
         uint64_t ptp_ns = 0;
         if (ctx->ptp_clk) {
             ptp_ns = audyn_ptp_clock_now_ns(ctx->ptp_clk);
         }
-        return audyn_archive_get_time_ns(clock_src, ptp_ns);
+        return audyn_archive_get_time_ns(ctx->archive_clock, ptp_ns);
     }
 
     /* Default: system time */
@@ -681,6 +695,29 @@ int main(int argc, char **argv)
     if (pcap == 0) { fprintf(stderr, "Error: Pool frames must be > 0\n"); return 2; }
     if (fcap == 0) { fprintf(stderr, "Error: Frame capacity must be > 0\n"); return 2; }
 
+    /* Validate sample rate */
+    if (rate == 0 || rate > AUDYN_MAX_SAMPLE_RATE) {
+        fprintf(stderr, "Error: Sample rate must be 1-%u Hz\n", AUDYN_MAX_SAMPLE_RATE);
+        return 2;
+    }
+
+    /* Validate opus bitrate */
+    if (opus_bitrate < AUDYN_CLI_BITRATE_MIN || opus_bitrate > AUDYN_CLI_BITRATE_MAX) {
+        fprintf(stderr, "Error: Opus bitrate must be %u-%u bps\n",
+                AUDYN_CLI_BITRATE_MIN, AUDYN_CLI_BITRATE_MAX);
+        return 2;
+    }
+
+    /* Validate levels interval */
+    if (enable_levels) {
+        if (levels_interval_ms < AUDYN_LEVELS_INTERVAL_MIN ||
+            levels_interval_ms > AUDYN_LEVELS_INTERVAL_MAX) {
+            fprintf(stderr, "Error: Levels interval must be %u-%u ms\n",
+                    AUDYN_LEVELS_INTERVAL_MIN, AUDYN_LEVELS_INTERVAL_MAX);
+            return 2;
+        }
+    }
+
     /* Validate PTP options */
     int ptp_opts = (ptp_device ? 1 : 0) + (ptp_interface ? 1 : 0) + ptp_software;
     if (ptp_opts > 1) {
@@ -755,11 +792,22 @@ int main(int argc, char **argv)
                  source_ip, port, payload_type, samples_per_packet, rate, channels);
     }
 
+    LOG_DEBUG("Buffer config: queue=%u pool=%u frames=%u", qcap, pcap, fcap);
+    if (out_fmt == OUTPUT_OPUS) {
+        LOG_DEBUG("Opus config: bitrate=%u vbr=%d complexity=%d",
+                  opus_bitrate, opus_vbr, opus_complexity);
+    }
+
     /* --- Create core objects --- */
     audyn_frame_pool_t *pool = NULL;
     audyn_audio_queue_t *q = NULL;
     audyn_archive_policy_t *archive_policy = NULL;
     audyn_ptp_clock_t *ptp_clk = NULL;
+    audyn_level_meter_t *level_meter = NULL;
+    audyn_aes_input_t *aes_in = NULL;
+    audyn_pw_input_t *pw_in = NULL;
+    pthread_t worker_thread;
+    int worker_started = 0;
 
     pool = audyn_frame_pool_create(pcap, channels, fcap);
     if (!pool) {
@@ -818,7 +866,6 @@ int main(int argc, char **argv)
     }
 
     /* --- Create level meter (if enabled) --- */
-    audyn_level_meter_t *level_meter = NULL;
     if (enable_levels) {
         level_meter = audyn_level_meter_create(channels, rate, levels_interval_ms);
         if (!level_meter) {
@@ -834,6 +881,7 @@ int main(int argc, char **argv)
     worker_ctx.pool = pool;
     worker_ctx.queue = q;
     worker_ctx.archive = archive_policy;
+    worker_ctx.archive_clock = (audyn_archive_clock_t)archive_clock;
     worker_ctx.single_file_path = out_path;
     worker_ctx.format = out_fmt;
     worker_ctx.sample_rate = rate;
@@ -846,9 +894,6 @@ int main(int argc, char **argv)
     worker_ctx.level_meter = level_meter;
 
     /* --- Start worker thread --- */
-    pthread_t worker_thread;
-    int worker_started = 0;
-
     if (pthread_create(&worker_thread, NULL, worker_main, &worker_ctx) != 0) {
         LOG_ERROR("Worker thread create failed");
         goto cleanup;
@@ -856,9 +901,6 @@ int main(int argc, char **argv)
     worker_started = 1;
 
     /* --- Create input --- */
-    audyn_aes_input_t *aes_in = NULL;
-    audyn_pw_input_t *pw_in = NULL;
-
     if (input_src == INPUT_AES67) {
         audyn_aes_input_cfg_t aescfg;
         memset(&aescfg, 0, sizeof(aescfg));
@@ -921,13 +963,24 @@ int main(int argc, char **argv)
 
     /* --- Shutdown --- */
 cleanup:
-    /* Stop input first */
+    /* Stop input first and log statistics */
     if (aes_in) {
         audyn_aes_input_stop(aes_in);
+        /* Note: AES input stats logged by its own stop function */
         audyn_aes_input_destroy(aes_in);
     }
     if (pw_in) {
         audyn_pw_input_stop(pw_in);
+        /* Log PipeWire capture statistics */
+        audyn_pw_stats_t pw_stats;
+        audyn_pw_input_get_stats(pw_in, &pw_stats);
+        LOG_INFO("PipeWire stats: captured=%lu callbacks=%lu drops(pool=%lu queue=%lu empty=%lu) truncations=%lu",
+                 (unsigned long)pw_stats.frames_captured,
+                 (unsigned long)pw_stats.callbacks,
+                 (unsigned long)pw_stats.drops_pool,
+                 (unsigned long)pw_stats.drops_queue,
+                 (unsigned long)pw_stats.drops_empty,
+                 (unsigned long)pw_stats.truncations);
         audyn_pw_input_destroy(pw_in);
     }
 

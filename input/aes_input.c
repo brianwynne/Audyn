@@ -75,6 +75,17 @@
 #include "ptp_clock.h"
 #include "jitter_buffer.h"
 
+/* -------- Limits -------- */
+
+/* Sample rate limits (must match worker.h) */
+#define AES_MAX_SAMPLE_RATE 384000
+
+/* Maximum channel count */
+#define AES_MAX_CHANNELS 32
+
+/* Maximum samples per packet (AES67 allows up to 48 for 1ms at 48kHz) */
+#define AES_MAX_SAMPLES_PER_PACKET 1024
+
 /* -------- RTP parsing helpers -------- */
 
 #define RTP_MIN_HEADER_BYTES 12U
@@ -105,6 +116,10 @@ struct audyn_aes_input {
     audyn_audio_queue_t  *queue;
     audyn_aes_input_cfg_t cfg;
 
+    /* Owned copies of config strings */
+    char *source_ip;
+    char *bind_interface;
+
     int sock_fd;
 
     pthread_t thread;
@@ -118,7 +133,6 @@ struct audyn_aes_input {
 
     /* PTP timestamping */
     audyn_ptp_clock_t *ptp_clk;         /* Optional PTP clock (not owned) */
-    audyn_jitter_buffer_t *jitter_buf;  /* Optional jitter buffer (owned) */
     int hw_timestamps_enabled;          /* 1 if SO_TIMESTAMPING succeeded */
     int ptp_epoch_set;                  /* 1 if RTP epoch has been set */
 
@@ -133,7 +147,6 @@ struct audyn_aes_input {
     uint64_t frames_pushed;
     uint64_t frames_dropped_pool_empty;
     uint64_t frames_dropped_queue_full;
-    uint64_t hw_timestamp_failures;
 };
 
 static void set_error(audyn_aes_input_t *in, const char *msg) {
@@ -176,7 +189,7 @@ static int is_ipv4_multicast(const char *ip_str) {
 static int open_socket(audyn_aes_input_t *in) {
     if (!in) return -1;
 
-    const char *src_ip = in->cfg.source_ip;
+    const char *src_ip = in->source_ip;
     uint16_t port = in->cfg.port;
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -247,14 +260,14 @@ static int open_socket(audyn_aes_input_t *in) {
         }
 
         /* Bind multicast to specific interface if configured */
-        if (in->cfg.bind_interface && in->cfg.bind_interface[0] != '\0') {
+        if (in->bind_interface && in->bind_interface[0] != '\0') {
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
-            strncpy(ifr.ifr_name, in->cfg.bind_interface, IFNAMSIZ - 1);
+            strncpy(ifr.ifr_name, in->bind_interface, IFNAMSIZ - 1);
 
             if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
                 LOG_ERROR("aes_input: failed to get IP for interface '%s': %s",
-                          in->cfg.bind_interface, strerror(errno));
+                          in->bind_interface, strerror(errno));
                 set_error_errno(in, "ioctl(SIOCGIFADDR)");
                 close(fd);
                 return -1;
@@ -263,7 +276,7 @@ static int open_socket(audyn_aes_input_t *in) {
             struct sockaddr_in *ifaddr = (struct sockaddr_in *)&ifr.ifr_addr;
             mreq.imr_interface.s_addr = ifaddr->sin_addr.s_addr;
             LOG_INFO("aes_input: binding multicast to interface '%s' (%s)",
-                     in->cfg.bind_interface, inet_ntoa(ifaddr->sin_addr));
+                     in->bind_interface, inet_ntoa(ifaddr->sin_addr));
         } else {
             mreq.imr_interface.s_addr = htonl(INADDR_ANY);
         }
@@ -536,29 +549,97 @@ audyn_aes_input_create(audyn_frame_pool_t *pool,
                        audyn_audio_queue_t *queue,
                        const audyn_aes_input_cfg_t *cfg)
 {
-    if (!pool || !queue || !cfg) return NULL;
-    if (!cfg->source_ip || cfg->port == 0 || cfg->sample_rate == 0 ||
-        cfg->channels == 0 || cfg->samples_per_packet == 0) {
+    if (!pool || !queue || !cfg) {
+        LOG_ERROR("aes_input: NULL pool, queue, or config");
         return NULL;
     }
-    if (cfg->payload_type > 127) return NULL;
+    if (!cfg->source_ip || cfg->source_ip[0] == '\0') {
+        LOG_ERROR("aes_input: NULL or empty source_ip");
+        return NULL;
+    }
+    if (cfg->port == 0) {
+        LOG_ERROR("aes_input: port must be non-zero");
+        return NULL;
+    }
+    if (cfg->sample_rate == 0 || cfg->sample_rate > AES_MAX_SAMPLE_RATE) {
+        LOG_ERROR("aes_input: invalid sample_rate %u (must be 1-%u)",
+                  cfg->sample_rate, AES_MAX_SAMPLE_RATE);
+        return NULL;
+    }
+    if (cfg->channels == 0 || cfg->channels > AES_MAX_CHANNELS) {
+        LOG_ERROR("aes_input: invalid channels %u (must be 1-%u)",
+                  cfg->channels, AES_MAX_CHANNELS);
+        return NULL;
+    }
+    if (cfg->samples_per_packet == 0 || cfg->samples_per_packet > AES_MAX_SAMPLES_PER_PACKET) {
+        LOG_ERROR("aes_input: invalid samples_per_packet %u (must be 1-%u)",
+                  cfg->samples_per_packet, AES_MAX_SAMPLES_PER_PACKET);
+        return NULL;
+    }
+    if (cfg->payload_type > 127) {
+        LOG_ERROR("aes_input: invalid payload_type %u (must be 0-127)",
+                  cfg->payload_type);
+        return NULL;
+    }
 
     audyn_aes_input_t *in = (audyn_aes_input_t *)calloc(1, sizeof(*in));
-    if (!in) return NULL;
+    if (!in) {
+        LOG_ERROR("aes_input: failed to allocate structure");
+        return NULL;
+    }
 
     in->pool = pool;
     in->queue = queue;
     in->cfg = *cfg;
 
+    /* Make owned copies of config strings */
+    in->source_ip = strdup(cfg->source_ip);
+    if (!in->source_ip) {
+        LOG_ERROR("aes_input: failed to allocate source_ip");
+        free(in);
+        return NULL;
+    }
+
+    if (cfg->bind_interface && cfg->bind_interface[0] != '\0') {
+        in->bind_interface = strdup(cfg->bind_interface);
+        if (!in->bind_interface) {
+            LOG_ERROR("aes_input: failed to allocate bind_interface");
+            free(in->source_ip);
+            free(in);
+            return NULL;
+        }
+    } else {
+        in->bind_interface = NULL;
+    }
+
     in->sock_fd = -1;
     in->thread_started = 0;
 
-    pthread_mutex_init(&in->err_mu, NULL);
-    pthread_mutex_init(&in->state_mu, NULL);
-    in->stop_requested = 0;
+    if (pthread_mutex_init(&in->err_mu, NULL) != 0) {
+        LOG_ERROR("aes_input: failed to initialize error mutex");
+        free(in->bind_interface);
+        free(in->source_ip);
+        free(in);
+        return NULL;
+    }
 
+    if (pthread_mutex_init(&in->state_mu, NULL) != 0) {
+        LOG_ERROR("aes_input: failed to initialize state mutex");
+        pthread_mutex_destroy(&in->err_mu);
+        free(in->bind_interface);
+        free(in->source_ip);
+        free(in);
+        return NULL;
+    }
+
+    in->stop_requested = 0;
     in->last_error[0] = '\0';
     in->have_seq = 0;
+
+    LOG_INFO("aes_input: created (%s:%u PT=%u rate=%u ch=%u spp=%u)",
+             in->source_ip, (unsigned)in->cfg.port, (unsigned)in->cfg.payload_type,
+             (unsigned)in->cfg.sample_rate, (unsigned)in->cfg.channels,
+             (unsigned)in->cfg.samples_per_packet);
 
     return in;
 }
@@ -585,7 +666,7 @@ int audyn_aes_input_start(audyn_aes_input_t *in) {
     in->thread_started = 1;
 
     LOG_INFO("aes_input: started (%s:%u PT=%u rate=%u ch=%u spp=%u)",
-             in->cfg.source_ip, (unsigned)in->cfg.port, (unsigned)in->cfg.payload_type,
+             in->source_ip, (unsigned)in->cfg.port, (unsigned)in->cfg.payload_type,
              (unsigned)in->cfg.sample_rate, (unsigned)in->cfg.channels, (unsigned)in->cfg.samples_per_packet);
 
     return 0;
@@ -626,14 +707,18 @@ void audyn_aes_input_destroy(audyn_aes_input_t *in) {
     audyn_aes_input_stop(in);
     pthread_mutex_destroy(&in->err_mu);
     pthread_mutex_destroy(&in->state_mu);
+    free(in->bind_interface);
+    free(in->source_ip);
     free(in);
 }
 
-const char *audyn_aes_input_last_error(audyn_aes_input_t *in) {
+const char *audyn_aes_input_last_error(const audyn_aes_input_t *in) {
     if (!in) return NULL;
-    pthread_mutex_lock(&in->err_mu);
+    /* Note: This returns a pointer that may be invalidated if error changes.
+     * Use audyn_aes_input_get_last_error() for thread-safe access. */
+    pthread_mutex_lock((pthread_mutex_t *)&in->err_mu);
     const char *msg = in->last_error[0] ? in->last_error : NULL;
-    pthread_mutex_unlock(&in->err_mu);
+    pthread_mutex_unlock((pthread_mutex_t *)&in->err_mu);
     return msg;
 }
 
@@ -652,4 +737,42 @@ void audyn_aes_input_set_ptp_clock(audyn_aes_input_t *in, audyn_ptp_clock_t *clk
                                (mode == AUDYN_PTP_MODE_SOFTWARE) ? "SOFTWARE" : "NONE";
         LOG_INFO("aes_input: PTP clock set (mode=%s)", mode_str);
     }
+}
+
+int audyn_aes_input_is_running(const audyn_aes_input_t *in) {
+    if (!in) return 0;
+    return in->thread_started;
+}
+
+void audyn_aes_input_get_last_error(const audyn_aes_input_t *in, char *buf, size_t buflen) {
+    if (!buf || buflen == 0) return;
+    buf[0] = '\0';
+
+    if (!in) {
+        strncpy(buf, "no input", buflen - 1);
+        buf[buflen - 1] = '\0';
+        return;
+    }
+
+    /* Cast is safe because we're only reading and the mutex protects access */
+    pthread_mutex_lock((pthread_mutex_t *)&in->err_mu);
+    strncpy(buf, in->last_error[0] ? in->last_error : "ok", buflen - 1);
+    buf[buflen - 1] = '\0';
+    pthread_mutex_unlock((pthread_mutex_t *)&in->err_mu);
+}
+
+void audyn_aes_input_get_stats(const audyn_aes_input_t *in, audyn_aes_stats_t *stats) {
+    if (!stats) return;
+
+    if (!in) {
+        memset(stats, 0, sizeof(*stats));
+        return;
+    }
+
+    stats->packets_rx = in->packets_rx;
+    stats->packets_dropped = in->packets_dropped;
+    stats->discontinuities = in->discontinuities;
+    stats->frames_pushed = in->frames_pushed;
+    stats->frames_dropped_pool = in->frames_dropped_pool_empty;
+    stats->frames_dropped_queue = in->frames_dropped_queue_full;
 }

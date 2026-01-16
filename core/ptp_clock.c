@@ -38,6 +38,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <limits.h>
 
 #ifdef __linux__
 #include <sys/ioctl.h>
@@ -59,11 +62,18 @@
 /* Nanoseconds per second */
 #define NS_PER_SEC 1000000000ULL
 
+/* Maximum safe sample_delta before overflow risk in ns calculation */
+/* INT64_MAX / NS_PER_SEC = ~9.2e9 samples (~53 hours at 48kHz) */
+#define MAX_SAFE_SAMPLE_DELTA ((int64_t)(INT64_MAX / NS_PER_SEC))
+
 /* Internal PTP clock structure */
 struct audyn_ptp_clock {
     audyn_ptp_mode_t mode;
     int phc_fd;                     /* PHC device fd (hardware mode) */
     clockid_t clock_id;             /* Clock ID for clock_gettime() */
+
+    /* Thread safety */
+    pthread_mutex_t lock;           /* Protects epoch and wraparound state */
 
     /* RTP epoch tracking */
     int epoch_set;                  /* 1 if epoch has been established */
@@ -89,6 +99,13 @@ audyn_ptp_clock_t *audyn_ptp_clock_create(const audyn_ptp_cfg_t *cfg)
     audyn_ptp_clock_t *clk = calloc(1, sizeof(*clk));
     if (!clk) {
         LOG_ERROR("PTP: Failed to allocate clock structure");
+        return NULL;
+    }
+
+    /* Initialize mutex */
+    if (pthread_mutex_init(&clk->lock, NULL) != 0) {
+        LOG_ERROR("PTP: Failed to initialize mutex");
+        free(clk);
         return NULL;
     }
 
@@ -123,6 +140,7 @@ audyn_ptp_clock_t *audyn_ptp_clock_create(const audyn_ptp_cfg_t *cfg)
                              phc_path, cfg->interface);
                 } else {
                     LOG_ERROR("PTP: Failed to discover PHC from interface %s", cfg->interface);
+                    pthread_mutex_destroy(&clk->lock);
                     free(clk);
                     return NULL;
                 }
@@ -130,6 +148,7 @@ audyn_ptp_clock_t *audyn_ptp_clock_create(const audyn_ptp_cfg_t *cfg)
 
             if (!phc_path) {
                 LOG_ERROR("PTP: Hardware mode requires phc_device or interface");
+                pthread_mutex_destroy(&clk->lock);
                 free(clk);
                 return NULL;
             }
@@ -138,6 +157,7 @@ audyn_ptp_clock_t *audyn_ptp_clock_create(const audyn_ptp_cfg_t *cfg)
             if (clk->phc_fd < 0) {
                 LOG_ERROR("PTP: Failed to open PHC device %s: %s",
                           phc_path, strerror(errno));
+                pthread_mutex_destroy(&clk->lock);
                 free(clk);
                 return NULL;
             }
@@ -151,6 +171,7 @@ audyn_ptp_clock_t *audyn_ptp_clock_create(const audyn_ptp_cfg_t *cfg)
             if (clock_gettime(clk->clock_id, &ts) != 0) {
                 LOG_ERROR("PTP: Failed to read PHC clock: %s", strerror(errno));
                 close(clk->phc_fd);
+                pthread_mutex_destroy(&clk->lock);
                 free(clk);
                 return NULL;
             }
@@ -159,6 +180,7 @@ audyn_ptp_clock_t *audyn_ptp_clock_create(const audyn_ptp_cfg_t *cfg)
         }
 #else
             LOG_ERROR("PTP: Hardware mode only supported on Linux");
+            pthread_mutex_destroy(&clk->lock);
             free(clk);
             return NULL;
 #endif
@@ -166,6 +188,7 @@ audyn_ptp_clock_t *audyn_ptp_clock_create(const audyn_ptp_cfg_t *cfg)
 
         default:
             LOG_ERROR("PTP: Unknown mode %d", cfg->mode);
+            pthread_mutex_destroy(&clk->lock);
             free(clk);
             return NULL;
     }
@@ -187,6 +210,7 @@ void audyn_ptp_clock_destroy(audyn_ptp_clock_t *clk)
         LOG_DEBUG("PTP: Closed PHC device");
     }
 
+    pthread_mutex_destroy(&clk->lock);
     free(clk);
 }
 
@@ -240,12 +264,16 @@ void audyn_ptp_set_rtp_epoch(audyn_ptp_clock_t *clk,
         return;
     }
 
+    pthread_mutex_lock(&clk->lock);
+
     clk->epoch_rtp_ts = rtp_ts;
     clk->epoch_ptp_ns = ptp_ns;
     clk->epoch_sample_rate = sample_rate;
     clk->last_rtp_ts = rtp_ts;
     clk->rtp_wraparound_count = 0;
     clk->epoch_set = 1;
+
+    pthread_mutex_unlock(&clk->lock);
 
     LOG_DEBUG("PTP: Set RTP epoch - rtp_ts=%u ptp_ns=%lu sample_rate=%u",
               rtp_ts, (unsigned long)ptp_ns, sample_rate);
@@ -255,6 +283,7 @@ void audyn_ptp_set_rtp_epoch(audyn_ptp_clock_t *clk,
  * Convert RTP timestamp to PTP nanoseconds.
  *
  * Handles 32-bit RTP timestamp wraparound by tracking wraparounds.
+ * Thread-safe: acquires internal lock.
  */
 uint64_t audyn_ptp_rtp_to_ns(audyn_ptp_clock_t *clk,
                              uint32_t rtp_ts,
@@ -264,9 +293,20 @@ uint64_t audyn_ptp_rtp_to_ns(audyn_ptp_clock_t *clk,
         return 0;
     }
 
+    pthread_mutex_lock(&clk->lock);
+
     if (!clk->epoch_set) {
         /* No epoch set - can't convert */
         LOG_DEBUG("PTP: rtp_to_ns called but no epoch set");
+        pthread_mutex_unlock(&clk->lock);
+        return 0;
+    }
+
+    /* Validate sample rate matches epoch */
+    if (sample_rate != clk->epoch_sample_rate) {
+        LOG_ERROR("PTP: Sample rate mismatch - epoch=%u, requested=%u",
+                  clk->epoch_sample_rate, sample_rate);
+        pthread_mutex_unlock(&clk->lock);
         return 0;
     }
 
@@ -293,11 +333,22 @@ uint64_t audyn_ptp_rtp_to_ns(audyn_ptp_clock_t *clk,
         sample_delta = -(int64_t)(extended_epoch - extended_rtp);
     }
 
+    /* Check for potential overflow before multiplication */
+    int64_t abs_sample_delta = sample_delta >= 0 ? sample_delta : -sample_delta;
+    if (abs_sample_delta > MAX_SAFE_SAMPLE_DELTA) {
+        LOG_ERROR("PTP: Sample delta too large (%ld), would overflow - resetting epoch",
+                  (long)sample_delta);
+        /* Reset epoch to current packet to recover */
+        clk->epoch_rtp_ts = rtp_ts;
+        clk->epoch_ptp_ns = audyn_ptp_clock_now_ns(clk);
+        clk->rtp_wraparound_count = 0;
+        clk->last_rtp_ts = rtp_ts;
+        pthread_mutex_unlock(&clk->lock);
+        return clk->epoch_ptp_ns;
+    }
+
     /* Convert sample delta to nanoseconds */
     /* ns = samples * 1e9 / sample_rate */
-    /* To avoid overflow, use: ns = samples * (1e9 / sample_rate) */
-    /* For 48000 Hz: 1e9/48000 = 20833.333... */
-    /* More precise: ns = samples * 1000000000 / sample_rate */
     int64_t ns_delta = (sample_delta * (int64_t)NS_PER_SEC) / (int64_t)sample_rate;
 
     /* Apply delta to epoch PTP time */
@@ -308,11 +359,13 @@ uint64_t audyn_ptp_rtp_to_ns(audyn_ptp_clock_t *clk,
         if ((uint64_t)(-ns_delta) > clk->epoch_ptp_ns) {
             /* Would go negative - shouldn't happen */
             LOG_ERROR("PTP: rtp_to_ns resulted in negative time");
+            pthread_mutex_unlock(&clk->lock);
             return 0;
         }
         ptp_ns = clk->epoch_ptp_ns - (uint64_t)(-ns_delta);
     }
 
+    pthread_mutex_unlock(&clk->lock);
     return ptp_ns;
 }
 
@@ -329,6 +382,13 @@ audyn_ptp_mode_t audyn_ptp_clock_mode(const audyn_ptp_clock_t *clk)
 
 /*
  * Check if PTP clock is healthy/synchronized.
+ *
+ * For SOFTWARE mode, checks:
+ *   1. CLOCK_REALTIME is readable
+ *   2. ptp4l socket exists (indicates ptp4l is running)
+ *   3. Time is reasonable (after year 2020)
+ *
+ * For HARDWARE mode, checks if PHC is readable.
  */
 int audyn_ptp_clock_is_healthy(audyn_ptp_clock_t *clk)
 {
@@ -341,10 +401,29 @@ int audyn_ptp_clock_is_healthy(audyn_ptp_clock_t *clk)
             return 1;  /* Always "healthy" in none mode */
 
         case AUDYN_PTP_MODE_SOFTWARE:
-            /* Assume healthy if we can read the clock */
             {
                 struct timespec ts;
-                return (clock_gettime(CLOCK_REALTIME, &ts) == 0) ? 1 : 0;
+                if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+                    return 0;
+                }
+
+                /* Check if time is reasonable (after Jan 1, 2020 = 1577836800) */
+                if (ts.tv_sec < 1577836800) {
+                    LOG_DEBUG("PTP: System clock appears unsynced (time too old)");
+                    return 0;
+                }
+
+                /* Check for ptp4l socket - indicates ptp4l is running */
+                /* Common locations: /var/run/ptp4l, /run/ptp4l */
+                if (access("/var/run/ptp4l", F_OK) == 0 ||
+                    access("/run/ptp4l", F_OK) == 0) {
+                    return 1;  /* ptp4l appears to be running */
+                }
+
+                /* ptp4l socket not found - warn but still return healthy */
+                /* Some setups may use different socket paths or NTP instead */
+                LOG_DEBUG("PTP: ptp4l socket not found - assuming clock is synced by other means");
+                return 1;
             }
 
         case AUDYN_PTP_MODE_HARDWARE:

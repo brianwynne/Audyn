@@ -25,12 +25,16 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 /* Nanoseconds per millisecond */
 #define NS_PER_MS 1000000ULL
 
 /* Maximum sequence number delta to consider as reordering vs new stream */
 #define SEQ_MAX_DELTA 1000
+
+/* Forward declaration for internal reset */
+static void jb_reset_unlocked(audyn_jitter_buffer_t *jb);
 
 /* Sequence number comparison - handles wraparound */
 /* Returns: negative if a < b, 0 if a == b, positive if a > b */
@@ -44,6 +48,7 @@ struct audyn_jitter_buffer {
     /* Configuration */
     audyn_jb_cfg_t cfg;
     uint32_t buffer_size;       /* Number of packet slots */
+    uint32_t loss_threshold;    /* Packets ahead before declaring loss */
 
     /* Packet storage */
     audyn_jb_packet_t *packets; /* Circular buffer */
@@ -56,6 +61,9 @@ struct audyn_jitter_buffer {
     /* Timing */
     uint64_t playout_time_ns;   /* PTP time for next playout */
     uint64_t packet_duration_ns;/* Duration of one packet in ns */
+
+    /* Thread safety */
+    pthread_mutex_t lock;       /* Protects all mutable state */
 
     /* Statistics */
     audyn_jb_stats_t stats;
@@ -102,16 +110,29 @@ audyn_jitter_buffer_t *audyn_jb_create(const audyn_jb_cfg_t *cfg)
         return NULL;
     }
 
+    /* Initialize mutex */
+    if (pthread_mutex_init(&jb->lock, NULL) != 0) {
+        LOG_ERROR("JB: Failed to initialize mutex");
+        free(jb->packets);
+        free(jb);
+        return NULL;
+    }
+
     /* Calculate packet duration in nanoseconds */
     /* duration_ns = samples_per_packet * 1e9 / sample_rate */
     jb->packet_duration_ns = (uint64_t)cfg->samples_per_packet * 1000000000ULL /
                              cfg->sample_rate;
 
+    /* Calculate loss threshold in packets (2x depth_ms worth of packets) */
+    /* This properly handles non-1ms packet configurations */
+    jb->loss_threshold = packets_per_ms * cfg->depth_ms * 2;
+    if (jb->loss_threshold < 4) jb->loss_threshold = 4;
+
     jb->initialized = 0;
     memset(&jb->stats, 0, sizeof(jb->stats));
 
-    LOG_INFO("JB: Created jitter buffer - depth=%ums, slots=%u, packet_duration=%luns",
-             cfg->depth_ms, jb->buffer_size, (unsigned long)jb->packet_duration_ns);
+    LOG_INFO("JB: Created jitter buffer - depth=%ums, slots=%u, packet_duration=%luns, loss_threshold=%u",
+             cfg->depth_ms, jb->buffer_size, (unsigned long)jb->packet_duration_ns, jb->loss_threshold);
 
     return jb;
 }
@@ -132,6 +153,7 @@ void audyn_jb_destroy(audyn_jitter_buffer_t *jb)
               (unsigned long)jb->stats.packets_late,
               (unsigned long)jb->stats.packets_reordered);
 
+    pthread_mutex_destroy(&jb->lock);
     free(jb->packets);
     free(jb);
 }
@@ -163,6 +185,8 @@ int audyn_jb_insert(audyn_jitter_buffer_t *jb,
         return -1;
     }
 
+    pthread_mutex_lock(&jb->lock);
+
     jb->stats.packets_received++;
 
     /* First packet - initialize */
@@ -183,11 +207,12 @@ int audyn_jb_insert(audyn_jitter_buffer_t *jb,
             /* Late packet - we've already passed this sequence */
             jb->stats.packets_late++;
             LOG_DEBUG("JB: Late packet seq=%u (next=%u)", seq, jb->next_seq);
+            pthread_mutex_unlock(&jb->lock);
             return -1;
         } else {
             /* Large backward jump - probably new stream, reset */
             LOG_INFO("JB: Large sequence jump detected, resetting");
-            audyn_jb_reset(jb);
+            jb_reset_unlocked(jb);
             jb->next_seq = seq;
             jb->highest_seq = seq;
             jb->playout_time_ns = arrival_ns + (jb->cfg.depth_ms * NS_PER_MS);
@@ -205,12 +230,24 @@ int audyn_jb_insert(audyn_jitter_buffer_t *jb,
     }
 
     /* Check if packet would be too far ahead (buffer overflow) */
+    /* Instead of rejecting, advance next_seq to maintain sliding window */
     int16_t delta_ahead = seq_compare(seq, jb->next_seq);
     if (delta_ahead >= (int16_t)jb->buffer_size) {
+        /* Advance next_seq to make room, marking skipped packets as lost */
+        uint16_t advance_count = delta_ahead - (int16_t)jb->buffer_size + 1;
+        LOG_INFO("JB: Buffer overflow - advancing next_seq by %u to accommodate seq=%u",
+                 advance_count, seq);
+        for (uint16_t i = 0; i < advance_count; i++) {
+            uint32_t skip_index = seq_to_index(jb, jb->next_seq);
+            if (!jb->packets[skip_index].valid ||
+                jb->packets[skip_index].seq != jb->next_seq) {
+                jb->stats.packets_lost++;
+            }
+            jb->packets[skip_index].valid = 0;
+            jb->next_seq++;
+            jb->playout_time_ns += jb->packet_duration_ns;
+        }
         jb->stats.buffer_overflows++;
-        LOG_ERROR("JB: Buffer overflow - seq=%u too far ahead of next=%u",
-                  seq, jb->next_seq);
-        return -1;
     }
 
     /* Find slot and insert */
@@ -220,7 +257,17 @@ int audyn_jb_insert(audyn_jitter_buffer_t *jb,
     if (slot->valid && slot->seq == seq) {
         /* Duplicate packet */
         LOG_DEBUG("JB: Duplicate packet seq=%u", seq);
+        pthread_mutex_unlock(&jb->lock);
         return 0;
+    }
+
+    /* Check for slot collision - different seq in same slot */
+    if (slot->valid && slot->seq != seq) {
+        /* Slot contains a different packet - this is a collision */
+        /* The old packet will be lost, log it */
+        jb->stats.packets_lost++;
+        LOG_INFO("JB: Slot collision - seq=%u overwrites seq=%u at slot %u",
+                 seq, slot->seq, index);
     }
 
     slot->valid = 1;
@@ -238,6 +285,7 @@ int audyn_jb_insert(audyn_jitter_buffer_t *jb,
         jb->stats.max_depth = depth;
     }
 
+    pthread_mutex_unlock(&jb->lock);
     return 0;
 }
 
@@ -246,7 +294,14 @@ int audyn_jb_insert(audyn_jitter_buffer_t *jb,
  */
 audyn_jb_packet_t *audyn_jb_get(audyn_jitter_buffer_t *jb)
 {
-    if (!jb || !jb->initialized) {
+    if (!jb) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&jb->lock);
+
+    if (!jb->initialized) {
+        pthread_mutex_unlock(&jb->lock);
         return NULL;
     }
 
@@ -265,13 +320,14 @@ audyn_jb_packet_t *audyn_jb_get(audyn_jitter_buffer_t *jb)
         if (depth < 0) depth = 0;
         jb->stats.current_depth = depth;
 
+        pthread_mutex_unlock(&jb->lock);
         return slot;
     }
 
     /* Packet is missing */
     /* Check if we should skip it (give up waiting) */
     int16_t gap = seq_compare(jb->highest_seq, jb->next_seq);
-    if (gap > (int16_t)(jb->cfg.depth_ms * 2)) {
+    if (gap > (int16_t)jb->loss_threshold) {
         /* We've received packets well beyond this one - it's lost */
         jb->stats.packets_lost++;
         LOG_DEBUG("JB: Lost packet seq=%u (highest=%u)", jb->next_seq, jb->highest_seq);
@@ -280,6 +336,7 @@ audyn_jb_packet_t *audyn_jb_get(audyn_jitter_buffer_t *jb)
         /* Return NULL - caller should insert silence */
     }
 
+    pthread_mutex_unlock(&jb->lock);
     return NULL;
 }
 
@@ -288,12 +345,20 @@ audyn_jb_packet_t *audyn_jb_get(audyn_jitter_buffer_t *jb)
  */
 int audyn_jb_ready(audyn_jitter_buffer_t *jb, uint64_t current_ns)
 {
-    if (!jb || !jb->initialized) {
+    if (!jb) {
+        return 0;
+    }
+
+    pthread_mutex_lock(&jb->lock);
+
+    if (!jb->initialized) {
+        pthread_mutex_unlock(&jb->lock);
         return 0;
     }
 
     /* Check if it's time to playout */
     if (current_ns < jb->playout_time_ns) {
+        pthread_mutex_unlock(&jb->lock);
         return 0;
     }
 
@@ -302,27 +367,26 @@ int audyn_jb_ready(audyn_jitter_buffer_t *jb, uint64_t current_ns)
     audyn_jb_packet_t *slot = &jb->packets[index];
 
     if (slot->valid && slot->seq == jb->next_seq) {
+        pthread_mutex_unlock(&jb->lock);
         return 1;  /* Packet ready */
     }
 
     /* Packet missing - check if we've waited long enough */
     int16_t gap = seq_compare(jb->highest_seq, jb->next_seq);
-    if (gap > (int16_t)(jb->cfg.depth_ms * 2)) {
+    if (gap > (int16_t)jb->loss_threshold) {
+        pthread_mutex_unlock(&jb->lock);
         return 1;  /* Time to report loss */
     }
 
+    pthread_mutex_unlock(&jb->lock);
     return 0;  /* Still waiting */
 }
 
 /*
- * Reset the jitter buffer.
+ * Internal reset - called with lock already held.
  */
-void audyn_jb_reset(audyn_jitter_buffer_t *jb)
+static void jb_reset_unlocked(audyn_jitter_buffer_t *jb)
 {
-    if (!jb) {
-        return;
-    }
-
     /* Clear all packet slots */
     for (uint32_t i = 0; i < jb->buffer_size; i++) {
         jb->packets[i].valid = 0;
@@ -340,23 +404,42 @@ void audyn_jb_reset(audyn_jitter_buffer_t *jb)
 }
 
 /*
+ * Reset the jitter buffer.
+ */
+void audyn_jb_reset(audyn_jitter_buffer_t *jb)
+{
+    if (!jb) {
+        return;
+    }
+
+    pthread_mutex_lock(&jb->lock);
+    jb_reset_unlocked(jb);
+    pthread_mutex_unlock(&jb->lock);
+}
+
+/*
  * Get jitter buffer statistics.
  */
-void audyn_jb_get_stats(const audyn_jitter_buffer_t *jb, audyn_jb_stats_t *stats)
+void audyn_jb_get_stats(audyn_jitter_buffer_t *jb, audyn_jb_stats_t *stats)
 {
     if (!jb || !stats) {
         return;
     }
+    pthread_mutex_lock(&jb->lock);
     *stats = jb->stats;
+    pthread_mutex_unlock(&jb->lock);
 }
 
 /*
  * Get current buffer depth in packets.
  */
-int audyn_jb_depth(const audyn_jitter_buffer_t *jb)
+int audyn_jb_depth(audyn_jitter_buffer_t *jb)
 {
     if (!jb) {
         return 0;
     }
-    return jb->stats.current_depth;
+    pthread_mutex_lock(&jb->lock);
+    int depth = jb->stats.current_depth;
+    pthread_mutex_unlock(&jb->lock);
+    return depth;
 }

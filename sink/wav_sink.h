@@ -47,8 +47,17 @@ typedef enum audyn_wav_format {
 
 typedef struct audyn_wav_sink_cfg {
     audyn_wav_format_t format;
-    int enable_fsync; /* if non-zero, fsync() after each write() */
+    int enable_fsync; /* if non-zero, fsync() after each write() and close() */
 } audyn_wav_sink_cfg_t;
+
+/*
+ * WAV sink statistics.
+ */
+typedef struct audyn_wav_stats {
+    uint64_t frames_written;    /* Total frames written */
+    uint64_t bytes_written;     /* Total data bytes written (excluding header) */
+    int      size_limit_hit;    /* 1 if 4GB limit was hit */
+} audyn_wav_stats_t;
 
 typedef struct audyn_wav_sink audyn_wav_sink_t;
 
@@ -56,7 +65,18 @@ typedef struct audyn_wav_sink audyn_wav_sink_t;
 audyn_wav_sink_t *audyn_wav_sink_create(const audyn_wav_sink_cfg_t *cfg);
 void audyn_wav_sink_destroy(audyn_wav_sink_t *s);
 
-/* Open/close (NOT real-time safe). */
+/*
+ * Open a WAV file for writing.
+ *
+ * Parameters:
+ *   s           - sink instance (must not be NULL)
+ *   path        - output file path
+ *   sample_rate - sample rate in Hz (1-384000)
+ *   channels    - channel count (1-32)
+ *
+ * Returns 0 on success, -1 on error.
+ * Errors are logged via the project's logging system.
+ */
 int  audyn_wav_sink_open(audyn_wav_sink_t *s,
                          const char *path,
                          uint32_t sample_rate,
@@ -83,6 +103,15 @@ int  audyn_wav_sink_write(audyn_wav_sink_t *s,
 
 /* Flush + optionally fsync to disk. */
 int  audyn_wav_sink_sync(audyn_wav_sink_t *s);
+
+/*
+ * Get writing statistics.
+ *
+ * Parameters:
+ *   s     - sink instance (must not be NULL)
+ *   stats - output statistics structure (must not be NULL)
+ */
+void audyn_wav_sink_get_stats(const audyn_wav_sink_t *s, audyn_wav_stats_t *stats);
 
 #ifdef __cplusplus
 }

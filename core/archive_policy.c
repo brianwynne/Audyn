@@ -86,6 +86,11 @@ struct audyn_archive_policy {
     uint64_t next_boundary_ns;    /* Next rotation boundary (ns since epoch) */
     struct tm current_tm;         /* Broken-down time for current period */
     uint32_t current_centisec;    /* Centiseconds for accurate layout */
+
+    /* Statistics */
+    uint64_t rotations;           /* Number of file rotations */
+    uint64_t paths_generated;     /* Total paths generated */
+    uint64_t directories_created; /* Directories created via mkdir */
 };
 
 /* -------- Static helper functions -------- */
@@ -560,6 +565,34 @@ audyn_archive_policy_create(const audyn_archive_cfg_t *cfg)
         return NULL;
     }
 
+    /* Validate layout enum */
+    if (cfg->layout < AUDYN_ARCHIVE_LAYOUT_FLAT ||
+        cfg->layout > AUDYN_ARCHIVE_LAYOUT_CUSTOM) {
+        LOG_ERROR("archive: invalid layout %d", cfg->layout);
+        return NULL;
+    }
+
+    /* Validate clock_source enum */
+    if (cfg->clock_source < AUDYN_ARCHIVE_CLOCK_LOCALTIME ||
+        cfg->clock_source > AUDYN_ARCHIVE_CLOCK_PTP_TAI) {
+        LOG_ERROR("archive: invalid clock_source %d", cfg->clock_source);
+        return NULL;
+    }
+
+    /* Validate rotation_period_sec bounds (if rotation enabled) */
+    if (cfg->rotation_period_sec != 0) {
+        if (cfg->rotation_period_sec < AUDYN_ARCHIVE_MIN_ROTATION_SEC) {
+            LOG_ERROR("archive: rotation_period_sec %u too small (min=%u)",
+                      cfg->rotation_period_sec, AUDYN_ARCHIVE_MIN_ROTATION_SEC);
+            return NULL;
+        }
+        if (cfg->rotation_period_sec > AUDYN_ARCHIVE_MAX_ROTATION_SEC) {
+            LOG_ERROR("archive: rotation_period_sec %u too large (max=%u)",
+                      cfg->rotation_period_sec, AUDYN_ARCHIVE_MAX_ROTATION_SEC);
+            return NULL;
+        }
+    }
+
     audyn_archive_policy_t *p = calloc(1, sizeof(*p));
     if (!p) {
         LOG_ERROR("archive: failed to allocate policy");
@@ -606,6 +639,11 @@ audyn_archive_policy_create(const audyn_archive_cfg_t *cfg)
 void audyn_archive_policy_destroy(audyn_archive_policy_t *p)
 {
     if (!p) return;
+
+    LOG_DEBUG("archive: destroyed (rotations=%lu paths=%lu dirs=%lu)",
+              (unsigned long)p->rotations,
+              (unsigned long)p->paths_generated,
+              (unsigned long)p->directories_created);
 
     free(p->root_dir);
     free(p->suffix);
@@ -707,15 +745,25 @@ int audyn_archive_policy_next_path(
     if (p->create_directories) {
         char *dir = get_directory(out_path);
         if (dir) {
+            /* Check if directory exists before mkdir to track creations */
+            struct stat st;
+            int dir_existed = (stat(dir, &st) == 0 && S_ISDIR(st.st_mode));
+
             if (mkdir_recursive(dir, 0755) != 0) {
                 LOG_ERROR("archive: failed to create directory '%s': %s",
                           dir, strerror(errno));
                 free(dir);
                 return -1;
             }
+
+            if (!dir_existed) {
+                p->directories_created++;
+            }
             free(dir);
         }
     }
+
+    p->paths_generated++;
 
     /* Store period info for advance() */
     p->current_period_ns = period_start;
@@ -736,14 +784,16 @@ void audyn_archive_policy_advance(audyn_archive_policy_t *p)
     if (!p) return;
 
     p->initialized = 1;
+    p->rotations++;
 
-    LOG_DEBUG("archive: advanced to period starting at %04d-%02d-%02d %02d:%02d:%02d",
+    LOG_DEBUG("archive: advanced to period starting at %04d-%02d-%02d %02d:%02d:%02d (rotation #%lu)",
               p->current_tm.tm_year + 1900,
               p->current_tm.tm_mon + 1,
               p->current_tm.tm_mday,
               p->current_tm.tm_hour,
               p->current_tm.tm_min,
-              p->current_tm.tm_sec);
+              p->current_tm.tm_sec,
+              (unsigned long)p->rotations);
 }
 
 uint64_t audyn_archive_policy_next_boundary_ns(const audyn_archive_policy_t *p)
@@ -828,6 +878,22 @@ const char *audyn_archive_clock_to_string(audyn_archive_clock_t clock_src)
         case AUDYN_ARCHIVE_CLOCK_PTP_TAI:   return "ptp_tai";
         default:                             return "unknown";
     }
+}
+
+void audyn_archive_policy_get_stats(
+    const audyn_archive_policy_t *p,
+    audyn_archive_stats_t *stats)
+{
+    if (!stats) return;
+
+    if (!p) {
+        memset(stats, 0, sizeof(*stats));
+        return;
+    }
+
+    stats->rotations = p->rotations;
+    stats->paths_generated = p->paths_generated;
+    stats->directories_created = p->directories_created;
 }
 
 uint64_t audyn_archive_get_time_ns(

@@ -53,6 +53,12 @@
 extern "C" {
 #endif
 
+/* Minimum rotation period in seconds (to prevent excessive file creation) */
+#define AUDYN_ARCHIVE_MIN_ROTATION_SEC 10
+
+/* Maximum rotation period in seconds (1 year) */
+#define AUDYN_ARCHIVE_MAX_ROTATION_SEC 31536000
+
 /*
  * File naming layout types.
  *
@@ -122,6 +128,15 @@ typedef struct audyn_archive_cfg {
  * Archive policy state (opaque).
  */
 typedef struct audyn_archive_policy audyn_archive_policy_t;
+
+/*
+ * Archive policy statistics.
+ */
+typedef struct audyn_archive_stats {
+    uint64_t rotations;           /* Number of file rotations */
+    uint64_t paths_generated;     /* Total paths generated */
+    uint64_t directories_created; /* Directories created via mkdir */
+} audyn_archive_stats_t;
 
 /*
  * Create an archive policy instance.
@@ -276,6 +291,17 @@ int audyn_archive_clock_from_string(const char *name);
  *   Static string name, or "unknown" if invalid.
  */
 const char *audyn_archive_clock_to_string(audyn_archive_clock_t clock_src);
+
+/*
+ * Get policy statistics.
+ *
+ * Parameters:
+ *   p     - Archive policy instance
+ *   stats - Output statistics structure
+ */
+void audyn_archive_policy_get_stats(
+    const audyn_archive_policy_t *p,
+    audyn_archive_stats_t *stats);
 
 /*
  * Utility: Get current time in nanoseconds for the given clock source.

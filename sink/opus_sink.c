@@ -43,15 +43,24 @@
  */
 
 #include "opus_sink.h"
+#include "log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <ogg/ogg.h>
 #include <opus/opus.h>
+
+/* Audyn's Opus bitrate limits (bits per second) */
+#define AUDYN_OPUS_BITRATE_MIN 6000
+#define AUDYN_OPUS_BITRATE_MAX 510000
+
+/* Maximum FIFO size in frames to prevent runaway memory usage */
+#define FIFO_MAX_FRAMES (48000 * 10)  /* 10 seconds at 48kHz */
 
 struct audyn_opus_sink
 {
@@ -59,6 +68,7 @@ struct audyn_opus_sink
     int fd;
 
     audyn_opus_cfg_t cfg;
+    char *path;                 /* Output file path (for error messages) */
 
     ogg_stream_state os;
     int ogg_inited;
@@ -87,6 +97,9 @@ struct audyn_opus_sink
     int eos_written;
 
     int closed;
+
+    /* Statistics */
+    audyn_opus_stats_t stats;
 };
 
 static void le16(unsigned char *p, uint16_t v)
@@ -125,10 +138,22 @@ static int opus_frame_size_is_valid(uint32_t sample_rate, uint32_t frame_size)
 
 static ogg_uint32_t make_serial(void)
 {
-    /* Best-effort unique serial: time xor pid. */
+    ogg_uint32_t r = 0;
+
+    /* Try /dev/urandom first for proper randomness */
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd >= 0) {
+        ssize_t n = read(fd, &r, sizeof(r));
+        close(fd);
+        if (n == sizeof(r) && r != 0) {
+            return r;
+        }
+    }
+
+    /* Fallback: time xor pid with better mixing */
     ogg_uint32_t t = (ogg_uint32_t)time(NULL);
     ogg_uint32_t p = (ogg_uint32_t)getpid();
-    ogg_uint32_t r = (t << 16) ^ (t >> 16) ^ (p * 2654435761u);
+    r = (t << 16) ^ (t >> 16) ^ (p * 2654435761u);
     if (r == 0) r = 1;
     return r;
 }
@@ -298,25 +323,53 @@ static ogg_int64_t frames_to_48k(uint32_t frames, uint32_t sample_rate)
 audyn_opus_sink_t *
 audyn_opus_sink_create(const char *path, const audyn_opus_cfg_t *cfg)
 {
-    if (!path || !cfg) return NULL;
-    if (!(cfg->channels == 1 || cfg->channels == 2)) return NULL;
+    if (!path || !cfg) {
+        LOG_ERROR("OPUS: NULL path or config");
+        return NULL;
+    }
+    if (!(cfg->channels == 1 || cfg->channels == 2)) {
+        LOG_ERROR("OPUS: Invalid channel count %u (must be 1 or 2)", cfg->channels);
+        return NULL;
+    }
 
     /* Opus supports these sample rates. We accept only those to avoid hidden resampling. */
     const uint32_t sr = cfg->sample_rate;
-    if (!(sr == 8000 || sr == 12000 || sr == 16000 || sr == 24000 || sr == 48000))
+    if (!(sr == 8000 || sr == 12000 || sr == 16000 || sr == 24000 || sr == 48000)) {
+        LOG_ERROR("OPUS: Unsupported sample rate %u (must be 8000/12000/16000/24000/48000)", sr);
         return NULL;
+    }
 
     audyn_opus_sink_t *s = (audyn_opus_sink_t *)calloc(1, sizeof(*s));
-    if (!s) return NULL;
+    if (!s) {
+        LOG_ERROR("OPUS: Failed to allocate sink structure");
+        return NULL;
+    }
 
     s->cfg = *cfg;
     s->fd = -1;
 
+    /* Store path for error messages */
+    s->path = strdup(path);
+    if (!s->path) {
+        LOG_ERROR("OPUS: Failed to allocate path string");
+        free(s);
+        return NULL;
+    }
+
     if (s->cfg.complexity < 0) s->cfg.complexity = 5;
     if (s->cfg.complexity > 10) s->cfg.complexity = 10;
+
+    /* Validate and default bitrate */
     if (s->cfg.bitrate == 0) {
         s->cfg.bitrate = (s->cfg.channels == 1) ? 64000u : 96000u;
+    } else if (s->cfg.bitrate < AUDYN_OPUS_BITRATE_MIN) {
+        LOG_INFO("OPUS: Clamping bitrate %u to minimum %d", s->cfg.bitrate, AUDYN_OPUS_BITRATE_MIN);
+        s->cfg.bitrate = AUDYN_OPUS_BITRATE_MIN;
+    } else if (s->cfg.bitrate > AUDYN_OPUS_BITRATE_MAX) {
+        LOG_INFO("OPUS: Clamping bitrate %u to maximum %d", s->cfg.bitrate, AUDYN_OPUS_BITRATE_MAX);
+        s->cfg.bitrate = AUDYN_OPUS_BITRATE_MAX;
     }
+
     if (s->cfg.application != AUDYN_OPUS_APP_VOIP &&
         s->cfg.application != AUDYN_OPUS_APP_AUDIO &&
         s->cfg.application != AUDYN_OPUS_APP_RESTRICTED_LOWDELAY) {
@@ -325,6 +378,8 @@ audyn_opus_sink_create(const char *path, const audyn_opus_cfg_t *cfg)
 
     s->frame_size = choose_frame_size(sr);
     if (!opus_frame_size_is_valid(sr, s->frame_size)) {
+        LOG_ERROR("OPUS: Invalid frame size %u for sample rate %u", s->frame_size, sr);
+        free(s->path);
         free(s);
         return NULL;
     }
@@ -332,14 +387,24 @@ audyn_opus_sink_create(const char *path, const audyn_opus_cfg_t *cfg)
     /* Open file */
     s->fp = fopen(path, "wb");
     if (!s->fp) {
+        LOG_ERROR("OPUS: Failed to open file '%s' for writing", path);
+        free(s->path);
         free(s);
         return NULL;
     }
+
+    /* Get file descriptor for fsync, validate it */
     s->fd = fileno(s->fp);
+    if (s->fd < 0) {
+        LOG_DEBUG("OPUS: fileno() returned -1, fsync will be disabled");
+        s->cfg.enable_fsync = 0;
+    }
 
     /* Init ogg stream */
     if (ogg_stream_init(&s->os, (int)make_serial()) != 0) {
+        LOG_ERROR("OPUS: Failed to initialize Ogg stream for '%s'", path);
         fclose(s->fp);
+        free(s->path);
         free(s);
         return NULL;
     }
@@ -354,8 +419,10 @@ audyn_opus_sink_create(const char *path, const audyn_opus_cfg_t *cfg)
                                  (int)s->cfg.application,
                                  &err);
     if (!s->enc || err != OPUS_OK) {
+        LOG_ERROR("OPUS: Failed to create encoder: %s", opus_strerror(err));
         ogg_stream_clear(&s->os);
         fclose(s->fp);
+        free(s->path);
         free(s);
         return NULL;
     }
@@ -369,9 +436,11 @@ audyn_opus_sink_create(const char *path, const audyn_opus_cfg_t *cfg)
     s->pkt_cap = 4096;
     s->pkt = (unsigned char *)malloc((size_t)s->pkt_cap);
     if (!s->pkt) {
+        LOG_ERROR("OPUS: Failed to allocate packet buffer");
         opus_encoder_destroy(s->enc);
         ogg_stream_clear(&s->os);
         fclose(s->fp);
+        free(s->path);
         free(s);
         return NULL;
     }
@@ -381,19 +450,29 @@ audyn_opus_sink_create(const char *path, const audyn_opus_cfg_t *cfg)
     s->fifo_cap_frames = 0;
     s->fifo_len_frames = 0;
     if (ensure_fifo_capacity(s, s->frame_size * 2) != 0) {
+        LOG_ERROR("OPUS: Failed to allocate FIFO buffer");
         free(s->pkt);
         opus_encoder_destroy(s->enc);
         ogg_stream_clear(&s->os);
         fclose(s->fp);
+        free(s->path);
         free(s);
         return NULL;
     }
 
     /* Write Ogg Opus headers */
     if (write_opus_headers(s) != 0) {
+        LOG_ERROR("OPUS: Failed to write Ogg Opus headers to '%s'", path);
         audyn_opus_sink_destroy(s);
         return NULL;
     }
+
+    /* Initialize statistics */
+    memset(&s->stats, 0, sizeof(s->stats));
+
+    LOG_INFO("OPUS: Created sink '%s' - %uHz %uch %ubps %s complexity=%d",
+             path, sr, s->cfg.channels, s->cfg.bitrate,
+             s->cfg.vbr ? "VBR" : "CBR", s->cfg.complexity);
 
     return s;
 }
@@ -403,18 +482,42 @@ audyn_opus_sink_write(audyn_opus_sink_t *s,
                       const float *interleaved_f32,
                       uint32_t frames)
 {
-    if (!s || s->closed) return -1;
+    if (!s || s->closed) {
+        LOG_ERROR("OPUS: Write called on NULL or closed sink");
+        return -1;
+    }
     if (!interleaved_f32 || frames == 0) return 0;
 
-    /* Append to FIFO */
+    /* Check for integer overflow */
+    if (frames > UINT32_MAX - s->fifo_len_frames) {
+        LOG_ERROR("OPUS: FIFO length overflow (current=%u, adding=%u)",
+                  s->fifo_len_frames, frames);
+        return -1;
+    }
+
     const uint32_t new_len = s->fifo_len_frames + frames;
-    if (ensure_fifo_capacity(s, new_len) != 0) return -1;
+
+    /* Enforce maximum FIFO size to prevent runaway memory usage */
+    if (new_len > FIFO_MAX_FRAMES) {
+        LOG_ERROR("OPUS: FIFO size limit exceeded (requested=%u, max=%d)",
+                  new_len, FIFO_MAX_FRAMES);
+        s->stats.fifo_overflows++;
+        return -1;
+    }
+
+    if (ensure_fifo_capacity(s, new_len) != 0) {
+        LOG_ERROR("OPUS: Failed to expand FIFO to %u frames", new_len);
+        return -1;
+    }
 
     const size_t ch = (size_t)s->cfg.channels;
     memcpy(s->fifo + (size_t)s->fifo_len_frames * ch,
            interleaved_f32,
            (size_t)frames * ch * sizeof(float));
     s->fifo_len_frames = new_len;
+
+    /* Track input frames */
+    s->stats.frames_in += frames;
 
     /* Encode while we have a full Opus frame */
     while (s->fifo_len_frames >= s->frame_size) {
@@ -425,7 +528,10 @@ audyn_opus_sink_write(audyn_opus_sink_t *s,
                                         (int)s->frame_size,
                                         s->pkt,
                                         s->pkt_cap);
-        if (nb < 0) return -1;
+        if (nb < 0) {
+            LOG_ERROR("OPUS: Encode failed: %s", opus_strerror(nb));
+            return -1;
+        }
 
         ogg_packet op;
         memset(&op, 0, sizeof(op));
@@ -439,13 +545,22 @@ audyn_opus_sink_write(audyn_opus_sink_t *s,
         op.granulepos = s->granulepos_48k;
         op.packetno = s->packetno++;
 
-        if (ogg_stream_packetin(&s->os, &op) != 0)
+        if (ogg_stream_packetin(&s->os, &op) != 0) {
+            LOG_ERROR("OPUS: Failed to submit packet to Ogg stream");
             return -1;
+        }
 
         s->wrote_audio = 1;
 
-        if (flush_pages(s, 0) != 0)
+        /* Update statistics */
+        s->stats.frames_encoded += s->frame_size;
+        s->stats.packets_encoded++;
+        s->stats.bytes_encoded += (uint64_t)nb;
+
+        if (flush_pages(s, 0) != 0) {
+            LOG_ERROR("OPUS: Failed to flush Ogg pages");
             return -1;
+        }
 
         fifo_consume_frames(s, s->frame_size);
     }
@@ -563,6 +678,14 @@ audyn_opus_sink_close(audyn_opus_sink_t *s)
     }
 
     s->closed = 1;
+
+    LOG_DEBUG("OPUS: Closed '%s' - frames_in=%lu encoded=%lu packets=%lu bytes=%lu",
+              s->path ? s->path : "(unknown)",
+              (unsigned long)s->stats.frames_in,
+              (unsigned long)s->stats.frames_encoded,
+              (unsigned long)s->stats.packets_encoded,
+              (unsigned long)s->stats.bytes_encoded);
+
     return 0;
 }
 
@@ -583,5 +706,17 @@ audyn_opus_sink_destroy(audyn_opus_sink_t *s)
         s->fifo = NULL;
     }
 
+    if (s->path) {
+        free(s->path);
+        s->path = NULL;
+    }
+
     free(s);
+}
+
+void
+audyn_opus_sink_get_stats(const audyn_opus_sink_t *s, audyn_opus_stats_t *stats)
+{
+    if (!s || !stats) return;
+    *stats = s->stats;
 }

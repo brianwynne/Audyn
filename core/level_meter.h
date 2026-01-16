@@ -28,6 +28,9 @@ extern "C" {
 /* Maximum supported channels */
 #define AUDYN_METER_MAX_CHANNELS 2
 
+/* Sample rate limits */
+#define AUDYN_METER_MAX_SAMPLE_RATE 384000
+
 /* Level data for a single channel */
 typedef struct audyn_channel_level {
     float rms_linear;       /* RMS level (0.0 to 1.0) */
@@ -58,7 +61,22 @@ typedef struct audyn_level_meter {
     /* Computed levels (updated on output) */
     audyn_channel_level_t levels[AUDYN_METER_MAX_CHANNELS];
 
+    /* Statistics */
+    uint64_t frames_processed;          /* Total audio frames processed */
+    uint64_t outputs_sent;              /* Total JSON outputs sent */
+
+    /* Wall clock time for NULL frame handling */
+    uint64_t last_output_time_ms;
+
 } audyn_level_meter_t;
+
+/*
+ * Level meter statistics.
+ */
+typedef struct audyn_meter_stats {
+    uint64_t frames_processed;
+    uint64_t outputs_sent;
+} audyn_meter_stats_t;
 
 /*
  * Create a level meter.
@@ -115,6 +133,12 @@ void audyn_level_meter_get_levels(
  * Reset the meter (clear accumulators).
  */
 void audyn_level_meter_reset(audyn_level_meter_t *meter);
+
+/*
+ * Get meter statistics.
+ */
+void audyn_level_meter_get_stats(const audyn_level_meter_t *meter,
+                                  audyn_meter_stats_t *stats);
 
 #ifdef __cplusplus
 }

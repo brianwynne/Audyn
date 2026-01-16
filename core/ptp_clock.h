@@ -7,9 +7,14 @@
  *  Purpose:
  *      PTP (Precision Time Protocol) clock abstraction for AES67.
  *
- *      Supports two modes:
- *        1. Hardware PTP: Direct access to PHC (PTP Hardware Clock) via /dev/ptp*
+ *      Supports three modes:
+ *        1. None: Raw RTP timestamps only (no PTP)
  *        2. Software PTP: System CLOCK_REALTIME assumed synced by linuxptp (ptp4l/phc2sys)
+ *        3. Hardware PTP: Direct access to PHC (PTP Hardware Clock) via /dev/ptp*
+ *
+ *      Thread Safety:
+ *        - audyn_ptp_set_rtp_epoch() and audyn_ptp_rtp_to_ns() are thread-safe
+ *        - Can be called from different threads (e.g., network receive and audio playout)
  *
  *  AES67 Timing:
  *      AES67 uses PTP (IEEE 1588) for synchronization. RTP timestamps in AES67 packets
