@@ -1,0 +1,153 @@
+name: Build .deb Package
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (e.g., 1.0.1)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libpipewire-0.3-dev \
+            libspa-0.2-dev \
+            libopus-dev \
+            libogg-dev \
+            dpkg-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="1.0.0-dev.$(date +%Y%m%d).${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Build audyn binary
+        run: make
+
+      - name: Build frontend
+        working-directory: web/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build .deb package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCH="$(dpkg --print-architecture)"
+          PACKAGE_NAME="audyn_${VERSION}_${ARCH}"
+          BUILD_DIR="packaging/build"
+          DEBIAN_DIR="packaging/debian"
+
+          # Clean and create build directory
+          rm -rf "$BUILD_DIR"
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME"
+
+          # Copy DEBIAN control files
+          cp -r "$DEBIAN_DIR/DEBIAN" "$BUILD_DIR/$PACKAGE_NAME/"
+          chmod 755 "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/postinst"
+          chmod 755 "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/prerm"
+          chmod 755 "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/postrm"
+
+          # Update version and architecture in control file
+          sed -i "s/^Version:.*/Version: $VERSION/" "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/control"
+          sed -i "s/^Architecture:.*/Architecture: $ARCH/" "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/control"
+
+          # Copy audyn binary
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/usr/bin"
+          cp audyn "$BUILD_DIR/$PACKAGE_NAME/usr/bin/"
+          chmod 755 "$BUILD_DIR/$PACKAGE_NAME/usr/bin/audyn"
+
+          # Copy backend
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/backend"
+          cp -r web/backend/app "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/backend/"
+          cp web/backend/requirements.txt "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/backend/"
+
+          # Copy frontend
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/frontend"
+          cp -r web/frontend/dist/* "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/frontend/"
+
+          # Copy systemd service
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/lib/systemd/system"
+          cp "$DEBIAN_DIR/lib/systemd/system/audyn-web.service" \
+             "$BUILD_DIR/$PACKAGE_NAME/lib/systemd/system/"
+
+          # Copy nginx config
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/nginx/sites-available"
+          cp "$DEBIAN_DIR/etc/nginx/sites-available/audyn" \
+             "$BUILD_DIR/$PACKAGE_NAME/etc/nginx/sites-available/"
+
+          # Copy logrotate config
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/logrotate.d"
+          cp "$DEBIAN_DIR/etc/logrotate.d/audyn" \
+             "$BUILD_DIR/$PACKAGE_NAME/etc/logrotate.d/"
+
+          # Copy scripts
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/scripts"
+          cp "$DEBIAN_DIR/opt/audyn/scripts/"*.sh \
+             "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/scripts/"
+          chmod 755 "$BUILD_DIR/$PACKAGE_NAME/opt/audyn/scripts/"*.sh
+
+          # Create empty config directory
+          mkdir -p "$BUILD_DIR/$PACKAGE_NAME/etc/audyn"
+
+          # Set permissions
+          find "$BUILD_DIR/$PACKAGE_NAME" -type d -exec chmod 755 {} \;
+          find "$BUILD_DIR/$PACKAGE_NAME/opt" -type f -exec chmod 644 {} \;
+
+          # Build the .deb package
+          cd "$BUILD_DIR"
+          dpkg-deb --build --root-owner-group "$PACKAGE_NAME"
+
+          # Move to output location
+          mv "$PACKAGE_NAME.deb" ../
+          echo "package_name=$PACKAGE_NAME.deb" >> $GITHUB_ENV
+          echo "package_path=packaging/$PACKAGE_NAME.deb" >> $GITHUB_ENV
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: audyn-deb-${{ steps.version.outputs.version }}
+          path: packaging/*.deb
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: packaging/*.deb
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
