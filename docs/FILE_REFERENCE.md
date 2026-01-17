@@ -29,6 +29,7 @@ Complete reference documentation for every source file in the Audyn project.
 - Run worker thread for encoding and file I/O
 - Handle signals (SIGINT, SIGTERM) for graceful shutdown
 - Implement file rotation based on archive policy
+- VOX mode: threshold-based recording with separate segment files
 
 **Key Functions:**
 | Function | Description |
@@ -44,6 +45,8 @@ Complete reference documentation for every source file in the Audyn project.
 - `core/audio_queue.h`
 - `core/ptp_clock.h`
 - `core/archive_policy.h`
+- `core/level_meter.h`
+- `core/vox.h`
 - `input/aes_input.h`
 - `input/pipewire_input.h`
 - `sink/wav_sink.h`
@@ -204,6 +207,74 @@ typedef struct audyn_archive_cfg {
     int create_directories;
 } audyn_archive_cfg_t;
 ```
+
+---
+
+### core/vox.c / vox.h
+
+**Location:** `/core/vox.c`, `/core/vox.h`
+
+**Purpose:** Voice Activity Detection (VOX) module for threshold-based recording with configurable hang time.
+
+**Key Concepts:**
+- State machine: IDLE → DETECTING → ACTIVE → HANGOVER → IDLE
+- Pre-roll ring buffer captures audio before threshold crossing
+- Hysteresis prevents chatter (configurable release threshold)
+- Creates separate segment files per speech burst
+- Replaces time-based archive rotation when enabled
+
+**States:**
+| State | Description |
+|-------|-------------|
+| `AUDYN_VOX_IDLE` | Waiting for audio activity |
+| `AUDYN_VOX_DETECTING` | Activity detected, confirming threshold |
+| `AUDYN_VOX_ACTIVE` | Recording active |
+| `AUDYN_VOX_HANGOVER` | Silence detected, waiting hangover period |
+
+**Level Modes:**
+| Mode | Constant | Description |
+|------|----------|-------------|
+| RMS | `AUDYN_VOX_LEVEL_RMS` | Use RMS (average loudness) |
+| Peak | `AUDYN_VOX_LEVEL_PEAK` | Use peak level (transient response) |
+| Any | `AUDYN_VOX_LEVEL_ANY_CHANNEL` | Trigger if any channel exceeds threshold |
+
+**Configuration:**
+```c
+typedef struct audyn_vox_config {
+    float threshold_db;           // Activation threshold (-60 to -5)
+    float release_db;             // Release threshold (0 = auto: threshold - 5dB)
+    uint32_t detection_ms;        // Time to confirm activity (default 100)
+    uint32_t hangover_ms;         // Hang time after silence (default 2000)
+    uint32_t preroll_ms;          // Pre-roll buffer (default 500, max 5000)
+    audyn_vox_level_mode_t mode;  // Level source (rms, peak, any)
+    uint32_t sample_rate;
+    uint16_t channels;
+} audyn_vox_config_t;
+```
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `audyn_vox_create()` | Create VOX detector instance |
+| `audyn_vox_destroy()` | Destroy VOX detector |
+| `audyn_vox_process()` | Process frame, returns frames to write |
+| `audyn_vox_get_state()` | Get current state |
+| `audyn_vox_should_open_file()` | Check if new segment should start |
+| `audyn_vox_should_close_file()` | Check if segment should end |
+| `audyn_vox_flush()` | Flush remaining pre-roll frames |
+| `audyn_vox_reset()` | Reset to IDLE state |
+| `audyn_vox_get_stats()` | Get processing statistics |
+
+**CLI Options:**
+| Option | Description |
+|--------|-------------|
+| `--vox` | Enable VOX mode |
+| `--vox-threshold <dB>` | Activation threshold (default -30) |
+| `--vox-release <dB>` | Release threshold (0 = auto) |
+| `--vox-detection <ms>` | Detection delay (default 100) |
+| `--vox-hangover <ms>` | Hang time (default 2000) |
+| `--vox-preroll <ms>` | Pre-roll buffer (default 500, max 5000) |
+| `--vox-level <mode>` | Level source: rms, peak, any |
 
 ---
 
@@ -393,11 +464,23 @@ typedef struct audyn_opus_cfg {
 | `User` | User information with roles |
 | `UserRole` | Enum: admin, studio |
 | `Recorder` | Recorder instance data |
-| `RecorderConfig` | Recorder configuration |
+| `RecorderConfig` | Recorder configuration (includes VOX settings) |
 | `RecorderState` | Enum: stopped, recording, paused, error |
 | `Studio` | Studio configuration |
 | `ChannelLevel` | Audio level measurement |
 | `OutputFormat` | Enum: wav, flac, mp3, ogg |
+| `VoxLevelMode` | Enum: rms, peak, any |
+
+**RecorderConfig VOX Fields:**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `vox_enabled` | bool | false | Enable VOX for this recorder |
+| `vox_threshold_db` | float | -30.0 | Activation threshold in dB |
+| `vox_release_db` | float | 0.0 | Release threshold (0 = auto) |
+| `vox_detection_ms` | int | 100 | Detection delay in ms |
+| `vox_hangover_ms` | int | 2000 | Hang time in ms |
+| `vox_preroll_ms` | int | 500 | Pre-roll buffer in ms |
+| `vox_level_mode` | VoxLevelMode | rms | Level detection mode |
 
 ---
 
@@ -763,6 +846,9 @@ Configuration files stored in `~/.config/audyn/`.
 | `archive_layout` | string | File naming layout |
 | `archive_period` | number | Rotation period in seconds |
 | `archive_clock` | string | Clock source for timestamps |
+| `vox_facility_enabled` | boolean | Global enable for VOX feature |
+
+**VOX Facility:** When `vox_facility_enabled` is true, individual recorders can enable VOX mode via their `vox_enabled` setting. VOX creates separate segment files for each speech burst instead of time-based rotation.
 
 ---
 
@@ -785,6 +871,13 @@ Configuration files stored in `~/.config/audyn/`.
 | `multicast_addr` | string | AES67 multicast address |
 | `port` | number | UDP port number |
 | `archive_path` | string | Recording output directory |
+| `vox_enabled` | boolean | Enable VOX for this recorder |
+| `vox_threshold_db` | number | Activation threshold in dB |
+| `vox_release_db` | number | Release threshold (0 = auto) |
+| `vox_detection_ms` | number | Detection delay in ms |
+| `vox_hangover_ms` | number | Hang time in ms |
+| `vox_preroll_ms` | number | Pre-roll buffer in ms |
+| `vox_level_mode` | string | Level mode: rms, peak, any |
 
 ---
 

@@ -52,6 +52,12 @@ class SourceType(str, Enum):
     PIPEWIRE = "pipewire"
 
 
+class VoxLevelMode(str, Enum):
+    RMS = "rms"
+    PEAK = "peak"
+    ANY = "any"
+
+
 class ChannelLevel(BaseModel):
     """Audio level for a single channel."""
     name: str
@@ -81,6 +87,14 @@ class RecorderConfig(BaseModel):
     archive_period: int = 3600
     archive_clock: ArchiveClock = ArchiveClock.LOCALTIME
     ptp_interface: Optional[str] = None
+    # VOX (Voice Activation) settings
+    vox_enabled: bool = False
+    vox_threshold_db: float = -30.0
+    vox_release_db: float = 0.0  # 0 = auto (threshold - 5dB)
+    vox_detection_ms: int = 100
+    vox_hangover_ms: int = 2000
+    vox_preroll_ms: int = 500
+    vox_level_mode: VoxLevelMode = VoxLevelMode.RMS
 
 
 class Recorder(BaseModel):

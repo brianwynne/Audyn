@@ -55,6 +55,7 @@
 #include "ptp_clock.h"
 #include "archive_policy.h"
 #include "level_meter.h"
+#include "vox.h"
 
 /* -------- Limits -------- */
 
@@ -68,6 +69,16 @@
 /* Levels interval limits (ms) */
 #define AUDYN_LEVELS_INTERVAL_MIN 10
 #define AUDYN_LEVELS_INTERVAL_MAX 5000
+
+/* VOX limits */
+#define AUDYN_VOX_THRESHOLD_MIN -60.0f
+#define AUDYN_VOX_THRESHOLD_MAX -5.0f
+#define AUDYN_VOX_DETECTION_MIN 10
+#define AUDYN_VOX_DETECTION_MAX 5000
+#define AUDYN_VOX_HANGOVER_MIN 100
+#define AUDYN_VOX_HANGOVER_MAX 30000
+#define AUDYN_VOX_PREROLL_MIN 0
+#define AUDYN_VOX_PREROLL_MAX 5000
 
 /* -------- Types -------- */
 
@@ -164,6 +175,16 @@ static void usage(const char *argv0)
         "Metering:\n"
         "  --levels               Output JSON audio levels to stdout (~30fps)\n"
         "  --levels-interval <ms> Level output interval (default 33ms)\n\n"
+        "VOX (Voice-Activated Recording):\n"
+        "  --vox                  Enable VOX mode (threshold-based recording)\n"
+        "  --vox-threshold <dB>   Activation threshold (default -30, range -60 to -5)\n"
+        "  --vox-release <dB>     Release threshold (0 = auto: threshold - 5dB)\n"
+        "  --vox-detection <ms>   Detection delay before activation (default 100)\n"
+        "  --vox-hangover <ms>    Hang time after silence (default 2000)\n"
+        "  --vox-preroll <ms>     Pre-roll buffer (default 500, max 5000)\n"
+        "  --vox-level <mode>     Level source: rms, peak, any (default rms)\n\n"
+        "  VOX creates separate files for each audio segment.\n"
+        "  Files are named with sequential numbers (e.g., recording_001.wav).\n\n"
         "Examples:\n"
         "  Single file:\n"
         "    %s -o recording.wav -m 239.69.1.1 -p 5004\n"
@@ -210,6 +231,16 @@ static int parse_u8(const char *s, uint8_t *out)
     if (!end || *end != '\0') return -1;
     if (v > 0xFFu) return -1;
     *out = (uint8_t)v;
+    return 0;
+}
+
+static int parse_float(const char *s, float *out)
+{
+    if (!s || !*s || !out) return -1;
+    char *end = NULL;
+    float v = strtof(s, &end);
+    if (!end || *end != '\0') return -1;
+    *out = v;
     return 0;
 }
 
@@ -281,6 +312,12 @@ typedef struct worker_ctx {
 
     /* Level metering (optional) */
     audyn_level_meter_t *level_meter;
+
+    /* VOX (optional) */
+    audyn_vox_t *vox;
+    uint32_t vox_segment_number;
+    char vox_base_path[512];  /* Base path for segment files */
+    const char *vox_suffix;   /* File suffix (wav, opus) */
 
 } worker_ctx_t;
 
@@ -357,6 +394,19 @@ static int open_sink(worker_ctx_t *ctx, const char *path)
     } else {
         return open_opus_sink(ctx, path);
     }
+}
+
+static int open_vox_segment(worker_ctx_t *ctx)
+{
+    /* Generate segment filename */
+    char path[1024];
+    snprintf(path, sizeof(path), "%s_%03u.%s",
+             ctx->vox_base_path, ctx->vox_segment_number, ctx->vox_suffix);
+
+    ctx->vox_segment_number++;
+
+    LOG_INFO("VOX: Opening segment file: %s", path);
+    return open_sink(ctx, path);
 }
 
 static int write_to_sink(worker_ctx_t *ctx, audyn_audio_frame_t *frame)
@@ -440,7 +490,10 @@ static void *worker_main(void *arg)
     worker_ctx_t *ctx = (worker_ctx_t *)arg;
 
     /* Initial file open */
-    if (ctx->archive) {
+    if (ctx->vox) {
+        /* VOX mode - don't open file yet, wait for audio activity */
+        LOG_INFO("Worker: VOX mode, waiting for audio activity");
+    } else if (ctx->archive) {
         /* Archive mode - open first file */
         if (maybe_rotate(ctx) != 0) {
             LOG_ERROR("Worker: failed to open initial archive file");
@@ -514,15 +567,63 @@ static void *worker_main(void *arg)
             audyn_level_meter_process(ctx->level_meter, frame);
         }
 
-        /* Write to sink */
-        if (write_to_sink(ctx, frame) != 0) {
-            LOG_ERROR("Worker: write failed");
-            ctx->status = -1;
-            audyn_frame_release(frame);
-            break;
-        }
+        /* VOX processing */
+        if (ctx->vox) {
+            /* Get current levels from meter */
+            audyn_channel_level_t levels[2];
+            audyn_level_meter_get_levels(ctx->level_meter, levels);
 
-        audyn_frame_release(frame);
+            float rms_l = levels[0].rms_db;
+            float rms_r = (ctx->channels > 1) ? levels[1].rms_db : rms_l;
+            float peak_l = levels[0].peak_db;
+            float peak_r = (ctx->channels > 1) ? levels[1].peak_db : peak_l;
+
+            /* Process through VOX */
+            const audyn_audio_frame_t *out_frames[256];
+            int n = audyn_vox_process(ctx->vox, frame, rms_l, rms_r, peak_l, peak_r,
+                                      out_frames, 256);
+
+            /* Check if we need to open a new segment file */
+            if (audyn_vox_should_open_file(ctx->vox)) {
+                if (open_vox_segment(ctx) != 0) {
+                    LOG_ERROR("Worker: VOX segment open failed");
+                    ctx->status = -1;
+                    audyn_frame_release(frame);
+                    break;
+                }
+            }
+
+            /* Write output frames (may include pre-roll) */
+            for (int i = 0; i < n; i++) {
+                /* Cast away const - we're just passing through, not modifying */
+                if (write_to_sink(ctx, (audyn_audio_frame_t *)out_frames[i]) != 0) {
+                    LOG_ERROR("Worker: write failed");
+                    ctx->status = -1;
+                    break;
+                }
+            }
+
+            /* Check if we need to close the segment file */
+            if (audyn_vox_should_close_file(ctx->vox)) {
+                LOG_INFO("Worker: VOX closing segment (silence detected)");
+                close_current_sink(ctx);
+            }
+
+            audyn_frame_release(frame);
+
+            if (ctx->status != 0) {
+                break;
+            }
+        } else {
+            /* Normal (non-VOX) write */
+            if (write_to_sink(ctx, frame) != 0) {
+                LOG_ERROR("Worker: write failed");
+                ctx->status = -1;
+                audyn_frame_release(frame);
+                break;
+            }
+            audyn_frame_release(frame);
+        }
     }
 
     /* Drain remaining frames */
@@ -594,6 +695,15 @@ int main(int argc, char **argv)
     int enable_levels = 0;
     uint32_t levels_interval_ms = 33;
 
+    /* VOX defaults */
+    int enable_vox = 0;
+    float vox_threshold_db = AUDYN_VOX_DEFAULT_THRESHOLD_DB;
+    float vox_release_db = 0.0f;  /* 0 = auto */
+    uint32_t vox_detection_ms = AUDYN_VOX_DEFAULT_DETECTION_MS;
+    uint32_t vox_hangover_ms = AUDYN_VOX_DEFAULT_HANGOVER_MS;
+    uint32_t vox_preroll_ms = AUDYN_VOX_DEFAULT_PREROLL_MS;
+    const char *vox_level_str = "rms";
+
     /* --- Parse args --- */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-o") && i + 1 < argc) {
@@ -662,6 +772,20 @@ int main(int argc, char **argv)
             enable_levels = 1;
         } else if (!strcmp(argv[i], "--levels-interval") && i + 1 < argc) {
             if (parse_u32(argv[++i], &levels_interval_ms) != 0) { usage(argv[0]); return 2; }
+        } else if (!strcmp(argv[i], "--vox")) {
+            enable_vox = 1;
+        } else if (!strcmp(argv[i], "--vox-threshold") && i + 1 < argc) {
+            if (parse_float(argv[++i], &vox_threshold_db) != 0) { usage(argv[0]); return 2; }
+        } else if (!strcmp(argv[i], "--vox-release") && i + 1 < argc) {
+            if (parse_float(argv[++i], &vox_release_db) != 0) { usage(argv[0]); return 2; }
+        } else if (!strcmp(argv[i], "--vox-detection") && i + 1 < argc) {
+            if (parse_u32(argv[++i], &vox_detection_ms) != 0) { usage(argv[0]); return 2; }
+        } else if (!strcmp(argv[i], "--vox-hangover") && i + 1 < argc) {
+            if (parse_u32(argv[++i], &vox_hangover_ms) != 0) { usage(argv[0]); return 2; }
+        } else if (!strcmp(argv[i], "--vox-preroll") && i + 1 < argc) {
+            if (parse_u32(argv[++i], &vox_preroll_ms) != 0) { usage(argv[0]); return 2; }
+        } else if (!strcmp(argv[i], "--vox-level") && i + 1 < argc) {
+            vox_level_str = argv[++i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(argv[0]);
             return 0;
@@ -714,6 +838,60 @@ int main(int argc, char **argv)
             levels_interval_ms > AUDYN_LEVELS_INTERVAL_MAX) {
             fprintf(stderr, "Error: Levels interval must be %u-%u ms\n",
                     AUDYN_LEVELS_INTERVAL_MIN, AUDYN_LEVELS_INTERVAL_MAX);
+            return 2;
+        }
+    }
+
+    /* Validate VOX options */
+    audyn_vox_level_mode_t vox_level_mode = AUDYN_VOX_LEVEL_RMS;
+    if (enable_vox) {
+        /* VOX requires level metering */
+        enable_levels = 1;
+
+        /* VOX requires single-file mode (not archive rotation) */
+        if (archive_root) {
+            fprintf(stderr, "Error: VOX mode is not compatible with archive rotation.\n");
+            fprintf(stderr, "       Use -o <path> for single file mode, VOX will create segments.\n");
+            return 2;
+        }
+
+        if (vox_threshold_db < AUDYN_VOX_THRESHOLD_MIN ||
+            vox_threshold_db > AUDYN_VOX_THRESHOLD_MAX) {
+            fprintf(stderr, "Error: VOX threshold must be %.0f to %.0f dB\n",
+                    AUDYN_VOX_THRESHOLD_MIN, AUDYN_VOX_THRESHOLD_MAX);
+            return 2;
+        }
+
+        if (vox_detection_ms < AUDYN_VOX_DETECTION_MIN ||
+            vox_detection_ms > AUDYN_VOX_DETECTION_MAX) {
+            fprintf(stderr, "Error: VOX detection must be %u-%u ms\n",
+                    AUDYN_VOX_DETECTION_MIN, AUDYN_VOX_DETECTION_MAX);
+            return 2;
+        }
+
+        if (vox_hangover_ms < AUDYN_VOX_HANGOVER_MIN ||
+            vox_hangover_ms > AUDYN_VOX_HANGOVER_MAX) {
+            fprintf(stderr, "Error: VOX hangover must be %u-%u ms\n",
+                    AUDYN_VOX_HANGOVER_MIN, AUDYN_VOX_HANGOVER_MAX);
+            return 2;
+        }
+
+        if (vox_preroll_ms > AUDYN_VOX_PREROLL_MAX) {
+            fprintf(stderr, "Error: VOX pre-roll must be 0-%u ms\n",
+                    AUDYN_VOX_PREROLL_MAX);
+            return 2;
+        }
+
+        /* Parse level mode */
+        if (strcasecmp(vox_level_str, "rms") == 0) {
+            vox_level_mode = AUDYN_VOX_LEVEL_RMS;
+        } else if (strcasecmp(vox_level_str, "peak") == 0) {
+            vox_level_mode = AUDYN_VOX_LEVEL_PEAK;
+        } else if (strcasecmp(vox_level_str, "any") == 0) {
+            vox_level_mode = AUDYN_VOX_LEVEL_ANY_CHANNEL;
+        } else {
+            fprintf(stderr, "Error: Unknown VOX level mode '%s'\n", vox_level_str);
+            fprintf(stderr, "Valid modes: rms, peak, any\n");
             return 2;
         }
     }
@@ -804,6 +982,7 @@ int main(int argc, char **argv)
     audyn_archive_policy_t *archive_policy = NULL;
     audyn_ptp_clock_t *ptp_clk = NULL;
     audyn_level_meter_t *level_meter = NULL;
+    audyn_vox_t *vox = NULL;
     audyn_aes_input_t *aes_in = NULL;
     audyn_pw_input_t *pw_in = NULL;
     pthread_t worker_thread;
@@ -875,6 +1054,28 @@ int main(int argc, char **argv)
         LOG_INFO("Level metering enabled (interval=%ums)", levels_interval_ms);
     }
 
+    /* --- Create VOX detector (if enabled) --- */
+    if (enable_vox) {
+        audyn_vox_config_t vcfg;
+        memset(&vcfg, 0, sizeof(vcfg));
+        vcfg.threshold_db = vox_threshold_db;
+        vcfg.release_db = vox_release_db;
+        vcfg.detection_ms = vox_detection_ms;
+        vcfg.hangover_ms = vox_hangover_ms;
+        vcfg.preroll_ms = vox_preroll_ms;
+        vcfg.mode = vox_level_mode;
+        vcfg.sample_rate = rate;
+        vcfg.channels = channels;
+
+        vox = audyn_vox_create(&vcfg);
+        if (!vox) {
+            LOG_ERROR("VOX create failed");
+            goto cleanup;
+        }
+        LOG_INFO("VOX enabled (threshold=%.1fdB hangover=%ums preroll=%ums mode=%s)",
+                 vox_threshold_db, vox_hangover_ms, vox_preroll_ms, vox_level_str);
+    }
+
     /* --- Create worker context --- */
     worker_ctx_t worker_ctx;
     memset(&worker_ctx, 0, sizeof(worker_ctx));
@@ -892,6 +1093,24 @@ int main(int argc, char **argv)
     worker_ctx.ptp_clk = ptp_clk;
     worker_ctx.stop_flag = (volatile int *)&g_stop;
     worker_ctx.level_meter = level_meter;
+    worker_ctx.vox = vox;
+
+    /* Set up VOX base path (remove extension for segment naming) */
+    if (vox && out_path) {
+        const char *ext = strrchr(out_path, '.');
+        if (ext) {
+            size_t base_len = ext - out_path;
+            if (base_len >= sizeof(worker_ctx.vox_base_path)) {
+                base_len = sizeof(worker_ctx.vox_base_path) - 1;
+            }
+            strncpy(worker_ctx.vox_base_path, out_path, base_len);
+            worker_ctx.vox_base_path[base_len] = '\0';
+        } else {
+            strncpy(worker_ctx.vox_base_path, out_path, sizeof(worker_ctx.vox_base_path) - 1);
+        }
+        worker_ctx.vox_suffix = (out_fmt == OUTPUT_OPUS) ? "opus" : "wav";
+        worker_ctx.vox_segment_number = 1;
+    }
 
     /* --- Start worker thread --- */
     if (pthread_create(&worker_thread, NULL, worker_main, &worker_ctx) != 0) {
@@ -999,6 +1218,11 @@ cleanup:
     if (level_meter) {
         audyn_level_meter_flush(level_meter);
         audyn_level_meter_destroy(level_meter);
+    }
+
+    /* Destroy VOX detector */
+    if (vox) {
+        audyn_vox_destroy(vox);
     }
 
     /* Destroy archive policy */

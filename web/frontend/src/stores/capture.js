@@ -31,7 +31,8 @@ export const useCaptureStore = defineStore('capture', () => {
     archivePeriod: 3600,
     archiveClock: 'localtime',
     ptpInterface: null,
-    aes67Interface: null
+    aes67Interface: null,
+    voxFacilityEnabled: false
   })
 
   const sources = ref([])
@@ -95,7 +96,8 @@ export const useCaptureStore = defineStore('capture', () => {
             archivePeriod: data.archive_period || 3600,
             archiveClock: data.archive_clock || 'localtime',
             ptpInterface: data.ptp_interface || null,
-            aes67Interface: data.aes67_interface || null
+            aes67Interface: data.aes67_interface || null,
+            voxFacilityEnabled: data.vox_facility_enabled || false
           }
         }
       }
@@ -144,7 +146,8 @@ export const useCaptureStore = defineStore('capture', () => {
           archive_period: config.value.archivePeriod,
           archive_clock: config.value.archiveClock,
           ptp_interface: config.value.ptpInterface,
-          aes67_interface: config.value.aes67Interface
+          aes67_interface: config.value.aes67Interface,
+          vox_facility_enabled: config.value.voxFacilityEnabled
         })
       })
 

@@ -256,6 +256,116 @@
                     />
                   </v-col>
                 </template>
+
+                <!-- VOX Settings (shown when global VOX facility is enabled) -->
+                <template v-if="captureStore.config?.voxFacilityEnabled">
+                  <v-col cols="12">
+                    <v-divider class="my-4" />
+                    <div class="text-subtitle-2 text-medium-emphasis mb-2 d-flex align-center">
+                      <v-icon icon="mdi-microphone-variant" size="small" class="mr-2" />
+                      Voice Activity Detection (VOX)
+                    </div>
+                  </v-col>
+
+                  <v-col cols="12" md="4">
+                    <v-checkbox
+                      v-model="configForm.vox_enabled"
+                      label="Enable VOX for this recorder"
+                      hint="Creates separate files for each speech burst"
+                      persistent-hint
+                      :disabled="recorder.state === 'recording'"
+                    />
+                  </v-col>
+
+                  <v-expand-transition>
+                    <v-row v-if="configForm.vox_enabled" dense class="px-3">
+                      <v-col cols="12" md="6">
+                        <v-slider
+                          v-model.number="configForm.vox_threshold_db"
+                          label="Threshold"
+                          :min="-60"
+                          :max="-10"
+                          :step="1"
+                          thumb-label="always"
+                          :disabled="recorder.state === 'recording'"
+                        >
+                          <template v-slot:append>
+                            <span class="text-caption">{{ configForm.vox_threshold_db }} dB</span>
+                          </template>
+                        </v-slider>
+                      </v-col>
+
+                      <v-col cols="12" md="6">
+                        <v-select
+                          v-model="configForm.vox_level_mode"
+                          :items="voxLevelModes"
+                          item-title="title"
+                          item-value="value"
+                          label="Level Mode"
+                          variant="outlined"
+                          density="compact"
+                          :disabled="recorder.state === 'recording'"
+                        />
+                      </v-col>
+
+                      <v-col cols="6" md="3">
+                        <v-text-field
+                          v-model.number="configForm.vox_detection_ms"
+                          label="Detection Time"
+                          type="number"
+                          suffix="ms"
+                          variant="outlined"
+                          density="compact"
+                          hint="Time above threshold before recording starts"
+                          persistent-hint
+                          :disabled="recorder.state === 'recording'"
+                        />
+                      </v-col>
+
+                      <v-col cols="6" md="3">
+                        <v-text-field
+                          v-model.number="configForm.vox_hangover_ms"
+                          label="Hang Time"
+                          type="number"
+                          suffix="ms"
+                          variant="outlined"
+                          density="compact"
+                          hint="Continue after silence detected"
+                          persistent-hint
+                          :disabled="recorder.state === 'recording'"
+                        />
+                      </v-col>
+
+                      <v-col cols="6" md="3">
+                        <v-text-field
+                          v-model.number="configForm.vox_preroll_ms"
+                          label="Pre-roll"
+                          type="number"
+                          suffix="ms"
+                          variant="outlined"
+                          density="compact"
+                          hint="Audio captured before trigger (max 5000)"
+                          persistent-hint
+                          :disabled="recorder.state === 'recording'"
+                        />
+                      </v-col>
+
+                      <v-col cols="6" md="3">
+                        <v-text-field
+                          v-model.number="configForm.vox_release_db"
+                          label="Release Threshold"
+                          type="number"
+                          suffix="dB"
+                          variant="outlined"
+                          density="compact"
+                          hint="0 = auto (threshold - 5dB)"
+                          persistent-hint
+                          :disabled="recorder.state === 'recording'"
+                        />
+                      </v-col>
+                    </v-row>
+                  </v-expand-transition>
+                </template>
               </v-row>
               <v-btn
                 type="submit"
@@ -299,11 +409,13 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRecordersStore } from '@/stores/recorders'
 import { useStudiosStore } from '@/stores/studios'
+import { useCaptureStore } from '@/stores/capture'
 import AudioMeter from '@/components/AudioMeter.vue'
 
 const route = useRoute()
 const recordersStore = useRecordersStore()
 const studiosStore = useStudiosStore()
+const captureStore = useCaptureStore()
 
 const loading = ref(false)
 const availableAesSources = ref([])
@@ -361,6 +473,13 @@ const bitrateOptions = [
 // FLAC compression level options (0-8, higher = more compression)
 const flacCompressionOptions = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
+// VOX level mode options
+const voxLevelModes = [
+  { title: 'RMS (Average)', value: 'rms' },
+  { title: 'Peak', value: 'peak' },
+  { title: 'Any Channel', value: 'any' }
+]
+
 const configForm = ref({
   source_type: 'aes67',
   source_id: null,
@@ -373,7 +492,15 @@ const configForm = ref({
   channels: 2,
   bitrate: 128000,
   flac_compression: 5,
-  archive_root: ''
+  archive_root: '',
+  // VOX settings
+  vox_enabled: false,
+  vox_threshold_db: -30,
+  vox_release_db: 0,
+  vox_detection_ms: 100,
+  vox_hangover_ms: 2000,
+  vox_preroll_ms: 500,
+  vox_level_mode: 'rms'
 })
 
 const recorder = computed(() =>
@@ -453,7 +580,15 @@ watch(recorder, (rec) => {
       channels: rec.config.channels || 2,
       bitrate: rec.config.bitrate || 128000,
       flac_compression: rec.config.flac_compression || 5,
-      archive_root: rec.config.archive_root || ''
+      archive_root: rec.config.archive_root || '',
+      // VOX settings
+      vox_enabled: rec.config.vox_enabled || false,
+      vox_threshold_db: rec.config.vox_threshold_db ?? -30,
+      vox_release_db: rec.config.vox_release_db ?? 0,
+      vox_detection_ms: rec.config.vox_detection_ms ?? 100,
+      vox_hangover_ms: rec.config.vox_hangover_ms ?? 2000,
+      vox_preroll_ms: rec.config.vox_preroll_ms ?? 500,
+      vox_level_mode: rec.config.vox_level_mode || 'rms'
     }
   }
 }, { immediate: true })
@@ -486,6 +621,7 @@ onMounted(async () => {
   await Promise.all([
     recordersStore.fetchRecorders(),
     studiosStore.fetchStudios(),
+    captureStore.fetchConfig(),
     fetchAesSources(),
     fetchPipewireSources()
   ])

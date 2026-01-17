@@ -74,6 +74,9 @@ class CaptureConfig(BaseModel):
     # AES67 network settings
     aes67_interface: Optional[str] = None  # Network interface for multicast
 
+    # VOX (Voice Activation) facility
+    vox_facility_enabled: bool = False  # Global enable for VOX feature
+
 
 class PartialCaptureConfig(BaseModel):
     """Partial capture configuration for updates (all fields optional)."""
@@ -90,6 +93,7 @@ class PartialCaptureConfig(BaseModel):
     archive_clock: Optional[ArchiveClock] = None
     ptp_interface: Optional[str] = None
     aes67_interface: Optional[str] = None
+    vox_facility_enabled: Optional[bool] = None
 
 
 class CaptureStatus(BaseModel):

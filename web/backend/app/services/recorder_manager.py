@@ -132,6 +132,17 @@ class RecorderManager:
         # Always enable level metering for web UI
         cmd.append("--levels")
 
+        # VOX settings (only if globally enabled and per-recorder enabled)
+        if global_cfg and global_cfg.vox_facility_enabled and config.vox_enabled:
+            cmd.append("--vox")
+            cmd.extend(["--vox-threshold", str(config.vox_threshold_db)])
+            if config.vox_release_db != 0:
+                cmd.extend(["--vox-release", str(config.vox_release_db)])
+            cmd.extend(["--vox-detection", str(config.vox_detection_ms)])
+            cmd.extend(["--vox-hangover", str(config.vox_hangover_ms)])
+            cmd.extend(["--vox-preroll", str(config.vox_preroll_ms)])
+            cmd.extend(["--vox-level", config.vox_level_mode.value])
+
         return cmd
 
     async def start_recorder(self, recorder_id: int, config: RecorderConfig, studio_id: str = None) -> bool:

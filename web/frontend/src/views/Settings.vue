@@ -381,6 +381,52 @@
     </v-row>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- VOICE ACTIVITY DETECTION SECTION -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
+      <v-icon icon="mdi-microphone-variant" size="small" class="mr-2" />
+      Voice Activity Detection
+    </div>
+
+    <v-row class="mb-6">
+      <!-- VOX Facility -->
+      <v-col cols="12" md="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-microphone-variant" class="mr-2" color="pink" />
+            VOX Facility
+            <v-chip
+              v-if="config.voxFacilityEnabled"
+              size="x-small"
+              class="ml-2"
+              color="success"
+              variant="flat"
+            >
+              Enabled
+            </v-chip>
+          </v-card-title>
+          <v-card-text class="pt-4">
+            <v-checkbox
+              v-model="config.voxFacilityEnabled"
+              label="Enable VOX (Voice-Activated Recording)"
+              hint="When enabled, individual recorders can use threshold-based recording with configurable hang time"
+              persistent-hint
+            />
+            <v-alert
+              type="info"
+              variant="tonal"
+              density="compact"
+              class="mt-4"
+            >
+              VOX creates separate segment files for each speech burst instead of time-based rotation.
+              Configure per-recorder settings in the Capture page.
+            </v-alert>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- SYSTEM CONFIGURATION SECTION -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
@@ -881,7 +927,7 @@ async function saveSettings() {
     // Update the store
     captureStore.config = { ...config.value }
 
-    // Save archive/PTP/AES67 config to backend
+    // Save archive/PTP/AES67/VOX config to backend
     await fetch('/api/control/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -891,7 +937,8 @@ async function saveSettings() {
         archive_period: config.value.archivePeriod,
         archive_clock: config.value.archiveClock,
         ptp_interface: config.value.ptpInterface,
-        aes67_interface: config.value.aes67Interface
+        aes67_interface: config.value.aes67Interface,
+        vox_facility_enabled: config.value.voxFacilityEnabled
       })
     })
 
@@ -945,7 +992,8 @@ function resetSettings() {
     archivePeriod: 3600,
     archiveClock: 'localtime',
     ptpInterface: null,
-    aes67Interface: null
+    aes67Interface: null,
+    voxFacilityEnabled: false
   }
   systemConfig.value = {
     hostname: '',
