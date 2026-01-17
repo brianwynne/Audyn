@@ -44,8 +44,9 @@ chmod 755 "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/postinst"
 chmod 755 "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/prerm"
 chmod 755 "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/postrm"
 
-# Update version in control file
+# Update version and architecture in control file
 sed -i "s/^Version:.*/Version: $VERSION/" "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/control"
+sed -i "s/^Architecture:.*/Architecture: $ARCH/" "$BUILD_DIR/$PACKAGE_NAME/DEBIAN/control"
 
 # Build audyn binary
 echo "[2/6] Building audyn binary..."
