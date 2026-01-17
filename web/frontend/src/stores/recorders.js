@@ -18,6 +18,8 @@ export const useRecordersStore = defineStore('recorders', () => {
   // WebSocket for real-time levels
   let levelsWebSocket = null
   const connected = ref(false)
+  let reconnectAttempts = 0
+  const maxReconnectDelay = 30000 // Max 30 seconds
 
   // Getters
   const activeRecorders = computed(() =>
@@ -234,6 +236,7 @@ export const useRecordersStore = defineStore('recorders', () => {
 
     levelsWebSocket.onopen = () => {
       connected.value = true
+      reconnectAttempts = 0 // Reset on successful connection
       console.log('Levels WebSocket connected')
     }
 
@@ -253,12 +256,15 @@ export const useRecordersStore = defineStore('recorders', () => {
 
     levelsWebSocket.onclose = () => {
       connected.value = false
-      // Reconnect after delay
+      // Reconnect with exponential backoff
+      reconnectAttempts++
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), maxReconnectDelay)
+      console.log(`WebSocket closed, reconnecting in ${delay}ms (attempt ${reconnectAttempts})`)
       setTimeout(() => {
         if (levelsWebSocket?.readyState === WebSocket.CLOSED) {
           connectLevels()
         }
-      }, 2000)
+      }, delay)
     }
 
     levelsWebSocket.onerror = (err) => {

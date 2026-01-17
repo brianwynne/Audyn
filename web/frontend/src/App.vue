@@ -245,26 +245,30 @@ async function handleLogout() {
 // Initialize on mount
 onMounted(async () => {
   if (authStore.isAuthenticated) {
-    await captureStore.fetchStatus()
-    await captureStore.fetchSources()
-    await recordersStore.fetchRecorders()
-    await studiosStore.fetchStudios()
+    // Fetch all data in parallel for faster initialization
+    await Promise.all([
+      captureStore.fetchStatus(),
+      captureStore.fetchSources(),
+      recordersStore.fetchRecorders(),
+      studiosStore.fetchStudios(),
+      authStore.fetchSelectedStudio()
+    ])
     recordersStore.connectLevels()
-
-    // Fetch user's selected studio
-    await authStore.fetchSelectedStudio()
   }
 })
 
 // Watch for authentication changes
 watch(() => authStore.isAuthenticated, async (isAuth) => {
   if (isAuth) {
-    await captureStore.fetchStatus()
-    await captureStore.fetchSources()
-    await recordersStore.fetchRecorders()
-    await studiosStore.fetchStudios()
+    // Fetch all data in parallel for faster initialization
+    await Promise.all([
+      captureStore.fetchStatus(),
+      captureStore.fetchSources(),
+      recordersStore.fetchRecorders(),
+      studiosStore.fetchStudios(),
+      authStore.fetchSelectedStudio()
+    ])
     recordersStore.connectLevels()
-    await authStore.fetchSelectedStudio()
   } else {
     recordersStore.disconnectLevels()
   }

@@ -77,6 +77,9 @@ class RecorderManager:
         """Build command line for recorder."""
         cmd = [AUDYN_BIN]
 
+        # Load global config once for all settings
+        global_cfg = get_global_config()
+
         # Use global settings from Settings tab for archive config
         # Fall back to recorder config if global not set
         archive_layout = "dailydir"
@@ -84,7 +87,6 @@ class RecorderManager:
         archive_clock = "localtime"
         archive_base = os.getenv("AUDYN_ARCHIVE_ROOT", "/var/lib/audyn/archive")
 
-        global_cfg = get_global_config()
         if global_cfg:
             archive_layout = global_cfg.archive_layout.value if global_cfg.archive_layout else "dailydir"
             archive_period = global_cfg.archive_period or 3600
@@ -116,7 +118,6 @@ class RecorderManager:
             cmd.extend(["--spp", str(config.samples_per_packet or 48)])
 
             # AES67 network interface (from global config)
-            global_cfg = get_global_config()
             if global_cfg and global_cfg.aes67_interface:
                 cmd.extend(["--interface", global_cfg.aes67_interface])
 

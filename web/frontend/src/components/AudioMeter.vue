@@ -7,7 +7,7 @@
         <div class="meter-background">
           <div
             class="meter-fill"
-            :style="{ width: `${levelPercent}%` }"
+            :style="{ transform: `scaleX(${(100 - levelPercent) / 100})` }"
             :class="meterClass"
           />
           <div
@@ -101,9 +101,11 @@ const meterClass = computed(() => {
   position: absolute;
   top: 0;
   right: 0;
+  width: 100%;
   height: 100%;
   background: rgba(0, 0, 0, 0.7);
-  transition: width 0.05s linear;
+  transform-origin: right center;
+  will-change: transform;
 }
 
 .meter-peak {
@@ -112,7 +114,7 @@ const meterClass = computed(() => {
   width: 3px;
   height: 100%;
   background: white;
-  transition: left 0.1s ease-out;
+  will-change: left;
 }
 
 .meter-peak.clipping {

@@ -56,22 +56,29 @@ class ConnectionManager:
                 self._level_task.cancel()
 
     async def broadcast(self, message: dict):
-        """Broadcast message to all connected clients."""
+        """Broadcast message to all connected clients in parallel."""
         if not self.active_connections:
             return
 
         data = json.dumps(message)
-        disconnected = []
 
-        for connection in self.active_connections:
+        async def send_to_client(connection: WebSocket):
             try:
                 await connection.send_text(data)
+                return None
             except Exception:
-                disconnected.append(connection)
+                return connection
+
+        # Send to all clients in parallel
+        results = await asyncio.gather(
+            *[send_to_client(conn) for conn in self.active_connections],
+            return_exceptions=True
+        )
 
         # Clean up disconnected clients
-        for conn in disconnected:
-            self.disconnect(conn)
+        for result in results:
+            if result is not None and isinstance(result, WebSocket):
+                self.disconnect(result)
 
     async def _broadcast_levels(self):
         """Continuously broadcast audio levels for all recorders."""
