@@ -138,9 +138,11 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { usePlayerStore } from '@/stores/player'
 import { useLocalPlaybackStore } from '@/stores/localPlayback'
+import { useCaptureStore } from '@/stores/capture'
 
 const playerStore = usePlayerStore()
 const localPlaybackStore = useLocalPlaybackStore()
+const captureStore = useCaptureStore()
 
 const audioElement = ref(null)
 const currentTime = ref(0)
@@ -373,8 +375,8 @@ watch(() => playerStore.currentFile, async (newFile) => {
     // Fetch file info to get duration and growing status
     await fetchFileInfo(newFile.path)
 
-    // Try to use local file first (if available and file is not growing)
-    if (!isGrowing.value && localPlaybackStore.isAvailable) {
+    // Try to use local file first (if globally enabled, available, and file is not growing)
+    if (!isGrowing.value && captureStore.config.localPlaybackEnabled && localPlaybackStore.isAvailable) {
       const url = await localPlaybackStore.getLocalFileUrl(newFile.path)
       if (url) {
         localBlobUrl.value = url

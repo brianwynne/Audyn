@@ -77,6 +77,9 @@ class CaptureConfig(BaseModel):
     # VOX (Voice Activation) facility
     vox_facility_enabled: bool = False  # Global enable for VOX feature
 
+    # Local Playback facility (SMB mapped drive access)
+    local_playback_enabled: bool = False  # Global enable for local playback feature
+
 
 class PartialCaptureConfig(BaseModel):
     """Partial capture configuration for updates (all fields optional)."""
@@ -94,6 +97,7 @@ class PartialCaptureConfig(BaseModel):
     ptp_interface: Optional[str] = None
     aes67_interface: Optional[str] = None
     vox_facility_enabled: Optional[bool] = None
+    local_playback_enabled: Optional[bool] = None
 
 
 class CaptureStatus(BaseModel):

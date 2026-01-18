@@ -435,11 +435,45 @@
     </div>
 
     <v-row class="mb-6">
+      <!-- Global Enable Toggle -->
       <v-col cols="12" md="6">
         <v-card variant="outlined" class="fill-height">
           <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
             <v-icon icon="mdi-folder-play" class="mr-2" color="amber" />
-            Local Folder Access
+            Local Playback Facility
+          </v-card-title>
+          <v-card-text class="pt-4">
+            <v-checkbox
+              v-model="config.localPlaybackEnabled"
+              label="Enable Local Playback"
+              hint="When enabled, users can map the SMB share for buffer-free on-air playback"
+              persistent-hint
+              hide-details="auto"
+              class="mb-4"
+            />
+            <v-alert
+              type="info"
+              variant="tonal"
+              density="compact"
+            >
+              Local playback allows users to access recordings directly from a mapped network drive
+              instead of streaming from the server. Ideal for on-air use.
+            </v-alert>
+          </v-card-text>
+          <v-card-actions>
+            <v-btn color="primary" @click="saveConfig" :loading="saving">
+              Save
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-col>
+
+      <!-- Folder Picker (only shown when globally enabled) -->
+      <v-col v-if="config.localPlaybackEnabled" cols="12" md="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-folder-network" class="mr-2" color="amber" />
+            Mapped Drive
             <v-chip
               v-if="localPlaybackStore.isAvailable"
               size="x-small"
@@ -471,19 +505,29 @@
             </v-alert>
 
             <template v-if="localPlaybackStore.isSupported">
-              <p class="text-body-2 mb-4">
-                Connect a local folder containing synced recordings for buffer-free playback.
-                Ideal for on-air use when files are synced via SMB or rsync.
-              </p>
+              <v-alert
+                type="info"
+                variant="tonal"
+                density="compact"
+                class="mb-4"
+              >
+                <div class="text-subtitle-2 mb-1">Setup Instructions:</div>
+                <ol class="text-body-2 pl-4 mb-0">
+                  <li>Map the Audyn SMB share as a network drive<br/>
+                    <code class="text-caption">\\server-ip\audyn</code> (user: audyn)
+                  </li>
+                  <li>Click "Select Mapped Drive" below and choose the mapped drive</li>
+                </ol>
+              </v-alert>
 
               <template v-if="localPlaybackStore.isAvailable">
                 <v-list density="compact" class="mb-4">
                   <v-list-item>
                     <template #prepend>
-                      <v-icon icon="mdi-folder" color="amber" />
+                      <v-icon icon="mdi-folder-network" color="amber" />
                     </template>
                     <v-list-item-title>{{ localPlaybackStore.directoryName }}</v-list-item-title>
-                    <v-list-item-subtitle>Connected folder</v-list-item-subtitle>
+                    <v-list-item-subtitle>Mapped drive connected</v-list-item-subtitle>
                   </v-list-item>
                 </v-list>
                 <v-btn
@@ -516,9 +560,9 @@
                   color="primary"
                   variant="elevated"
                   @click="localPlaybackStore.selectFolder()"
-                  prepend-icon="mdi-folder-plus"
+                  prepend-icon="mdi-folder-network"
                 >
-                  Select Local Folder
+                  Select Mapped Drive
                 </v-btn>
               </template>
 
@@ -1032,6 +1076,26 @@ function formatDate(dateStr) {
   return new Date(dateStr).toLocaleDateString()
 }
 
+// Save just capture config (for individual settings like VOX and Local Playback)
+async function saveConfig() {
+  saving.value = true
+  try {
+    captureStore.config = { ...config.value }
+    await fetch('/api/control/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vox_facility_enabled: config.value.voxFacilityEnabled,
+        local_playback_enabled: config.value.localPlaybackEnabled
+      })
+    })
+  } catch (err) {
+    console.error('Failed to save config:', err)
+  } finally {
+    saving.value = false
+  }
+}
+
 // Methods
 async function saveSettings() {
   saving.value = true
@@ -1051,7 +1115,8 @@ async function saveSettings() {
         archive_clock: config.value.archiveClock,
         ptp_interface: config.value.ptpInterface,
         aes67_interface: config.value.aes67Interface,
-        vox_facility_enabled: config.value.voxFacilityEnabled
+        vox_facility_enabled: config.value.voxFacilityEnabled,
+        local_playback_enabled: config.value.localPlaybackEnabled
       })
     })
 
