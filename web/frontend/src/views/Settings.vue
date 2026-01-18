@@ -427,6 +427,117 @@
     </v-row>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- LOCAL PLAYBACK SECTION -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
+      <v-icon icon="mdi-folder-play" size="small" class="mr-2" />
+      Local Playback
+    </div>
+
+    <v-row class="mb-6">
+      <v-col cols="12" md="6">
+        <v-card variant="outlined" class="fill-height">
+          <v-card-title class="d-flex align-center py-3 bg-grey-darken-4">
+            <v-icon icon="mdi-folder-play" class="mr-2" color="amber" />
+            Local Folder Access
+            <v-chip
+              v-if="localPlaybackStore.isAvailable"
+              size="x-small"
+              class="ml-2"
+              color="success"
+              variant="flat"
+            >
+              Connected
+            </v-chip>
+            <v-chip
+              v-else-if="localPlaybackStore.enabled && !localPlaybackStore.hasPermission"
+              size="x-small"
+              class="ml-2"
+              color="warning"
+              variant="flat"
+            >
+              Permission Required
+            </v-chip>
+          </v-card-title>
+          <v-card-text class="pt-4">
+            <v-alert
+              v-if="!localPlaybackStore.isSupported"
+              type="warning"
+              variant="tonal"
+              density="compact"
+              class="mb-4"
+            >
+              Local playback requires Chrome or Edge browser.
+            </v-alert>
+
+            <template v-if="localPlaybackStore.isSupported">
+              <p class="text-body-2 mb-4">
+                Connect a local folder containing synced recordings for buffer-free playback.
+                Ideal for on-air use when files are synced via SMB or rsync.
+              </p>
+
+              <template v-if="localPlaybackStore.isAvailable">
+                <v-list density="compact" class="mb-4">
+                  <v-list-item>
+                    <template #prepend>
+                      <v-icon icon="mdi-folder" color="amber" />
+                    </template>
+                    <v-list-item-title>{{ localPlaybackStore.directoryName }}</v-list-item-title>
+                    <v-list-item-subtitle>Connected folder</v-list-item-subtitle>
+                  </v-list-item>
+                </v-list>
+                <v-btn
+                  color="error"
+                  variant="tonal"
+                  @click="localPlaybackStore.disconnect()"
+                  prepend-icon="mdi-link-off"
+                >
+                  Disconnect
+                </v-btn>
+              </template>
+
+              <template v-else-if="localPlaybackStore.enabled && !localPlaybackStore.hasPermission">
+                <v-alert type="info" variant="tonal" density="compact" class="mb-4">
+                  Browser permission expired. Click below to re-grant access to
+                  <strong>{{ localPlaybackStore.directoryName }}</strong>.
+                </v-alert>
+                <v-btn
+                  color="primary"
+                  variant="elevated"
+                  @click="localPlaybackStore.requestPermission()"
+                  prepend-icon="mdi-lock-open"
+                >
+                  Grant Permission
+                </v-btn>
+              </template>
+
+              <template v-else>
+                <v-btn
+                  color="primary"
+                  variant="elevated"
+                  @click="localPlaybackStore.selectFolder()"
+                  prepend-icon="mdi-folder-plus"
+                >
+                  Select Local Folder
+                </v-btn>
+              </template>
+
+              <v-alert
+                type="info"
+                variant="tonal"
+                density="compact"
+                class="mt-4"
+              >
+                When playing files, Audyn will check the local folder first.
+                If not found locally, streaming from server is used as fallback.
+              </v-alert>
+            </template>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- SYSTEM CONFIGURATION SECTION -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <div class="text-overline text-medium-emphasis mb-3 d-flex align-center">
@@ -818,8 +929,10 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useCaptureStore } from '@/stores/capture'
+import { useLocalPlaybackStore } from '@/stores/localPlayback'
 
 const captureStore = useCaptureStore()
+const localPlaybackStore = useLocalPlaybackStore()
 
 // Local config copy
 const config = ref({ ...captureStore.config })
@@ -1422,6 +1535,9 @@ onMounted(async () => {
   // Fetch config from backend first, then copy to local state
   await captureStore.fetchConfig()
   config.value = { ...captureStore.config }
+
+  // Load saved local playback folder (if any)
+  localPlaybackStore.loadSavedFolder()
 
   // Fetch all configuration in parallel
   fetchStats()

@@ -12,6 +12,17 @@
               class="mr-1"
             />
             {{ playerStore.currentFile?.name || 'No file loaded' }}
+            <v-chip
+              v-if="isLocalPlayback"
+              size="x-small"
+              color="success"
+              variant="flat"
+              class="ml-1"
+              title="Playing from local folder (buffer-free)"
+            >
+              <v-icon size="x-small" start>mdi-folder</v-icon>
+              LOCAL
+            </v-chip>
           </div>
           <div class="text-caption text-medium-emphasis">
             {{ formatTime(currentTime) }} / {{ formatTime(effectiveDuration) }}
@@ -126,8 +137,10 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { usePlayerStore } from '@/stores/player'
+import { useLocalPlaybackStore } from '@/stores/localPlayback'
 
 const playerStore = usePlayerStore()
+const localPlaybackStore = useLocalPlaybackStore()
 
 const audioElement = ref(null)
 const currentTime = ref(0)
@@ -139,11 +152,19 @@ const isPlaying = ref(false)
 const isGrowing = ref(false)  // Whether file is still being recorded
 const seekPosition = ref(0)  // For seeking in completed files
 const isSeeking = ref(false)
+const localBlobUrl = ref(null)  // Blob URL for local file playback
+const isLocalPlayback = ref(false)  // Whether currently using local file
 
 // Computed
 const audioSrc = computed(() => {
   if (!playerStore.currentFile?.path) return ''
-  // For completed files, include start parameter when seeking
+
+  // Use local file if available (buffer-free playback)
+  if (localBlobUrl.value) {
+    return localBlobUrl.value
+  }
+
+  // Fall back to streaming from server
   const base = `/api/stream/preview/${playerStore.currentFile.path}`
   if (!isGrowing.value && seekPosition.value > 0) {
     return `${base}?start=${seekPosition.value}&follow=false`
@@ -276,6 +297,7 @@ function toggleMute() {
 
 function close() {
   stop()
+  cleanupBlobUrl()
   playerStore.clearFile()
 }
 
@@ -326,8 +348,20 @@ function handleKeydown(event) {
   }
 }
 
+// Cleanup blob URL when no longer needed
+function cleanupBlobUrl() {
+  if (localBlobUrl.value) {
+    URL.revokeObjectURL(localBlobUrl.value)
+    localBlobUrl.value = null
+  }
+  isLocalPlayback.value = false
+}
+
 // Watch for file changes
 watch(() => playerStore.currentFile, async (newFile) => {
+  // Cleanup previous blob URL
+  cleanupBlobUrl()
+
   if (newFile && audioElement.value) {
     // Reset state
     currentTime.value = 0
@@ -338,6 +372,16 @@ watch(() => playerStore.currentFile, async (newFile) => {
 
     // Fetch file info to get duration and growing status
     await fetchFileInfo(newFile.path)
+
+    // Try to use local file first (if available and file is not growing)
+    if (!isGrowing.value && localPlaybackStore.isAvailable) {
+      const url = await localPlaybackStore.getLocalFileUrl(newFile.path)
+      if (url) {
+        localBlobUrl.value = url
+        isLocalPlayback.value = true
+        console.log('Using local playback for:', newFile.path)
+      }
+    }
 
     // Auto-play when new file is loaded
     audioElement.value.load()
@@ -366,6 +410,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  cleanupBlobUrl()
 })
 </script>
 
