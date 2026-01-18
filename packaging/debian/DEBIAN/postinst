@@ -122,6 +122,54 @@ EOFAUTH
         # Set permissions on opt directory
         chown -R "$AUDYN_USER:$AUDYN_GROUP" "$AUDYN_OPT"
 
+        # Configure Samba share for archive access
+        SAMBA_CONF="/etc/samba/smb.conf"
+        if ! grep -q "\[audyn\]" "$SAMBA_CONF" 2>/dev/null; then
+            echo "Configuring Samba share for archive access..."
+
+            # Backup original config
+            if [ -f "$SAMBA_CONF" ]; then
+                cp "$SAMBA_CONF" "${SAMBA_CONF}.bak"
+            fi
+
+            # Add audyn share configuration
+            cat >> "$SAMBA_CONF" << 'EOFSAMBA'
+
+# Audyn Archive Share
+[audyn]
+   comment = Audyn Audio Archive
+   path = /var/lib/audyn/archive
+   browseable = yes
+   read only = yes
+   guest ok = no
+   valid users = audyn
+EOFSAMBA
+
+            # Ensure SMB3 minimum protocol in global section (security)
+            if ! grep -q "server min protocol" "$SAMBA_CONF"; then
+                sed -i '/^\[global\]/a\   server min protocol = SMB3' "$SAMBA_CONF"
+            fi
+
+            echo "Samba share configuration added"
+        fi
+
+        # Create Samba user (separate from system user)
+        # The system user was created with nologin shell, but Samba auth is separate
+        if ! pdbedit -L 2>/dev/null | grep -q "^audyn:"; then
+            echo "Creating Samba user: audyn"
+            # Set password to 'audyn' non-interactively
+            (echo "audyn"; echo "audyn") | smbpasswd -a -s audyn
+            smbpasswd -e audyn
+            echo ""
+            echo "  DEFAULT SAMBA PASSWORD: audyn"
+            echo "  Change with: sudo smbpasswd audyn"
+            echo ""
+        fi
+
+        # Enable and start Samba services
+        systemctl enable smbd.service nmbd.service
+        systemctl restart smbd.service nmbd.service
+
         # Enable nginx site
         if [ -f /etc/nginx/sites-available/audyn ]; then
             ln -sf /etc/nginx/sites-available/audyn /etc/nginx/sites-enabled/audyn
@@ -147,6 +195,10 @@ EOFAUTH
         echo ""
         echo "Login with breakglass password: audyn"
         echo "CHANGE THIS PASSWORD IMMEDIATELY!"
+        echo ""
+        echo "SMB Share: \\\\<management-ip>\\audyn"
+        echo "SMB User: audyn  Password: audyn"
+        echo "(Change with: sudo smbpasswd audyn)"
         echo ""
         echo "Default archive: $AUDYN_ARCHIVE"
         echo "Configuration: $AUDYN_CONFIG"

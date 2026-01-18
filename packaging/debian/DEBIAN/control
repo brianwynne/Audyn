@@ -3,7 +3,7 @@ Version: 1.0.0
 Section: sound
 Priority: optional
 Architecture: amd64
-Depends: python3 (>= 3.10), python3-pip, python3-venv, nginx, pipewire, libopus0, libogg0, certbot, python3-certbot-nginx
+Depends: python3 (>= 3.10), python3-pip, python3-venv, nginx, pipewire, libopus0, libogg0, certbot, python3-certbot-nginx, samba
 Recommends: pipewire-audio-client-libraries, wireplumber
 Maintainer: B. Wynne <admin@audyn.local>
 Description: Professional Audio Capture & Archival Engine
