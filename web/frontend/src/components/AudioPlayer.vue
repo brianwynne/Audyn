@@ -87,6 +87,29 @@
           </div>
         </div>
 
+        <!-- Local/Stream Toggle (only when local playback enabled) -->
+        <div
+          v-if="captureStore.config.localPlaybackEnabled && localPlaybackStore.isAvailable"
+          class="playback-mode d-flex align-center mr-4"
+        >
+          <v-btn-toggle
+            v-model="preferLocalPlayback"
+            mandatory
+            density="compact"
+            color="primary"
+            variant="outlined"
+          >
+            <v-btn :value="true" size="small" title="Play from local mapped drive (buffer-free)">
+              <v-icon start size="small">mdi-folder-network</v-icon>
+              Local
+            </v-btn>
+            <v-btn :value="false" size="small" title="Stream from server">
+              <v-icon start size="small">mdi-cloud-download</v-icon>
+              Stream
+            </v-btn>
+          </v-btn-toggle>
+        </div>
+
         <!-- Volume Control -->
         <div class="volume-control d-flex align-center" style="width: 150px">
           <v-btn
@@ -156,10 +179,18 @@ const seekPosition = ref(0)  // For seeking in completed files
 const isSeeking = ref(false)
 const localBlobUrl = ref(null)  // Blob URL for local file playback
 const isLocalPlayback = ref(false)  // Whether currently using local file
+const opusStreamCleanup = ref(null)  // Cleanup function for Opus MediaSource stream
+const isOpusStreaming = ref(false)  // Whether using MediaSource for growing Opus file
+const preferLocalPlayback = ref(true)  // User preference: true = local, false = stream
 
 // Computed
 const audioSrc = computed(() => {
   if (!playerStore.currentFile?.path) return ''
+
+  // If using Opus MediaSource streaming, src is set directly on element
+  if (isOpusStreaming.value) {
+    return null  // Don't set via computed - MediaSource sets it directly
+  }
 
   // Use local file if available (buffer-free playback)
   if (localBlobUrl.value) {
@@ -299,7 +330,7 @@ function toggleMute() {
 
 function close() {
   stop()
-  cleanupBlobUrl()
+  cleanupLocalPlayback()
   playerStore.clearFile()
 }
 
@@ -350,19 +381,26 @@ function handleKeydown(event) {
   }
 }
 
-// Cleanup blob URL when no longer needed
-function cleanupBlobUrl() {
+// Cleanup blob URL and opus stream when no longer needed
+function cleanupLocalPlayback() {
+  // Cleanup blob URL
   if (localBlobUrl.value) {
     URL.revokeObjectURL(localBlobUrl.value)
     localBlobUrl.value = null
   }
+  // Cleanup Opus MediaSource stream
+  if (opusStreamCleanup.value) {
+    opusStreamCleanup.value()
+    opusStreamCleanup.value = null
+  }
   isLocalPlayback.value = false
+  isOpusStreaming.value = false
 }
 
 // Watch for file changes
 watch(() => playerStore.currentFile, async (newFile) => {
-  // Cleanup previous blob URL
-  cleanupBlobUrl()
+  // Cleanup previous local playback
+  cleanupLocalPlayback()
 
   if (newFile && audioElement.value) {
     // Reset state
@@ -375,17 +413,35 @@ watch(() => playerStore.currentFile, async (newFile) => {
     // Fetch file info to get duration and growing status
     await fetchFileInfo(newFile.path)
 
-    // Try to use local file first (if globally enabled, available, and file is not growing)
-    if (!isGrowing.value && captureStore.config.localPlaybackEnabled && localPlaybackStore.isAvailable) {
-      const url = await localPlaybackStore.getLocalFileUrl(newFile.path)
-      if (url) {
-        localBlobUrl.value = url
-        isLocalPlayback.value = true
-        console.log('Using local playback for:', newFile.path)
+    // Check if local playback is preferred, globally enabled, and available
+    if (preferLocalPlayback.value && captureStore.config.localPlaybackEnabled && localPlaybackStore.isAvailable) {
+      const isOpus = localPlaybackStore.isOpusFormat(newFile.path)
+
+      if (isGrowing.value && isOpus) {
+        // Growing Opus file - use MediaSource streaming from local file
+        const streamResult = await localPlaybackStore.createOpusStream(audioElement.value, newFile.path)
+        if (streamResult) {
+          opusStreamCleanup.value = streamResult.cleanup
+          isOpusStreaming.value = true
+          isLocalPlayback.value = true
+          console.log('Using local Opus streaming for growing file:', newFile.path)
+          // Don't call load() - MediaSource handles it
+          audioElement.value.play()
+          return
+        }
+      } else if (!isGrowing.value) {
+        // Completed file - use blob URL
+        const url = await localPlaybackStore.getLocalFileUrl(newFile.path)
+        if (url) {
+          localBlobUrl.value = url
+          isLocalPlayback.value = true
+          console.log('Using local playback for:', newFile.path)
+        }
       }
+      // Growing non-Opus files fall through to server streaming
     }
 
-    // Auto-play when new file is loaded
+    // Auto-play when new file is loaded (for non-MediaSource sources)
     audioElement.value.load()
   }
 })
@@ -401,6 +457,56 @@ watch(() => playerStore.isPlaying, (shouldPlay) => {
   }
 })
 
+// Watch for playback mode toggle - reload current file with new mode
+watch(preferLocalPlayback, async (newValue) => {
+  if (!playerStore.currentFile || !audioElement.value) return
+
+  // Save current playback state
+  const wasPlaying = isPlaying.value
+  const savedTime = currentTime.value
+
+  // Cleanup current playback
+  cleanupLocalPlayback()
+
+  // Re-setup playback with new mode
+  if (newValue && captureStore.config.localPlaybackEnabled && localPlaybackStore.isAvailable) {
+    const isOpus = localPlaybackStore.isOpusFormat(playerStore.currentFile.path)
+
+    if (isGrowing.value && isOpus) {
+      // Growing Opus file - use MediaSource streaming
+      const streamResult = await localPlaybackStore.createOpusStream(audioElement.value, playerStore.currentFile.path)
+      if (streamResult) {
+        opusStreamCleanup.value = streamResult.cleanup
+        isOpusStreaming.value = true
+        isLocalPlayback.value = true
+        if (wasPlaying) audioElement.value.play()
+        return
+      }
+    } else if (!isGrowing.value) {
+      // Completed file - use blob URL
+      const url = await localPlaybackStore.getLocalFileUrl(playerStore.currentFile.path)
+      if (url) {
+        localBlobUrl.value = url
+        isLocalPlayback.value = true
+      }
+    }
+  }
+
+  // Load with new source (streaming if local not used)
+  audioElement.value.load()
+
+  // Restore playback position and state
+  audioElement.value.addEventListener('loadedmetadata', function onLoaded() {
+    audioElement.value.removeEventListener('loadedmetadata', onLoaded)
+    if (savedTime > 0 && !isGrowing.value) {
+      audioElement.value.currentTime = savedTime
+    }
+    if (wasPlaying) {
+      audioElement.value.play()
+    }
+  }, { once: true })
+})
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 
@@ -412,7 +518,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
-  cleanupBlobUrl()
+  cleanupLocalPlayback()
 })
 </script>
 

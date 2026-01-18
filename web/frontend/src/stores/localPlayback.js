@@ -243,6 +243,138 @@ export const useLocalPlaybackStore = defineStore('localPlayback', () => {
     return null
   }
 
+  /**
+   * Get a FileHandle for a local file (for streaming access)
+   * @param {string} filePath - Relative path
+   * @returns {FileSystemFileHandle|null}
+   */
+  async function getLocalFileHandle(filePath) {
+    if (!isAvailable.value) {
+      return null
+    }
+
+    try {
+      const parts = filePath.split('/').filter(p => p)
+      let currentHandle = directoryHandle.value
+
+      for (let i = 0; i < parts.length - 1; i++) {
+        currentHandle = await currentHandle.getDirectoryHandle(parts[i])
+      }
+
+      const fileName = parts[parts.length - 1]
+      return await currentHandle.getFileHandle(fileName)
+    } catch (err) {
+      if (err.name === 'NotFoundError') {
+        return null
+      }
+      console.warn('Error getting file handle:', err)
+      return null
+    }
+  }
+
+  /**
+   * Create a MediaSource stream for growing Opus files
+   * This enables local playback of files still being recorded
+   * @param {HTMLAudioElement} audioElement - The audio element to attach to
+   * @param {string} filePath - Relative path to the file
+   * @returns {Object} - { cleanup: Function, mediaSource: MediaSource } or null
+   */
+  async function createOpusStream(audioElement, filePath) {
+    const fileHandle = await getLocalFileHandle(filePath)
+    if (!fileHandle) {
+      return null
+    }
+
+    // Check MediaSource support for Ogg Opus
+    if (!MediaSource.isTypeSupported('audio/ogg; codecs=opus')) {
+      console.warn('MediaSource does not support audio/ogg; codecs=opus')
+      return null
+    }
+
+    const mediaSource = new MediaSource()
+    let sourceBuffer = null
+    let pollInterval = null
+    let lastReadPosition = 0
+    let isEnded = false
+
+    const cleanup = () => {
+      if (pollInterval) {
+        clearInterval(pollInterval)
+        pollInterval = null
+      }
+      if (mediaSource.readyState === 'open') {
+        try {
+          mediaSource.endOfStream()
+        } catch (e) {
+          // Ignore errors when ending stream
+        }
+      }
+    }
+
+    mediaSource.addEventListener('sourceopen', async () => {
+      try {
+        sourceBuffer = mediaSource.addSourceBuffer('audio/ogg; codecs=opus')
+
+        // Initial read
+        const file = await fileHandle.getFile()
+        const initialData = await file.arrayBuffer()
+        if (initialData.byteLength > 0) {
+          sourceBuffer.appendBuffer(initialData)
+          lastReadPosition = initialData.byteLength
+        }
+
+        // Poll for new data every 500ms
+        pollInterval = setInterval(async () => {
+          if (isEnded || !sourceBuffer || sourceBuffer.updating) {
+            return
+          }
+
+          try {
+            const file = await fileHandle.getFile()
+            const currentSize = file.size
+
+            if (currentSize > lastReadPosition) {
+              // Read only new data
+              const newData = await file.slice(lastReadPosition).arrayBuffer()
+              if (newData.byteLength > 0) {
+                sourceBuffer.appendBuffer(newData)
+                lastReadPosition = currentSize
+              }
+            }
+          } catch (err) {
+            console.warn('Error polling for new data:', err)
+          }
+        }, 500)
+      } catch (err) {
+        console.error('Error setting up MediaSource:', err)
+        cleanup()
+      }
+    })
+
+    // Create object URL and attach to audio element
+    const streamUrl = URL.createObjectURL(mediaSource)
+    audioElement.src = streamUrl
+
+    return {
+      cleanup: () => {
+        cleanup()
+        URL.revokeObjectURL(streamUrl)
+      },
+      mediaSource,
+      isOpusStream: true
+    }
+  }
+
+  /**
+   * Check if a file is Ogg Opus format based on extension
+   * @param {string} filePath
+   * @returns {boolean}
+   */
+  function isOpusFormat(filePath) {
+    const ext = filePath.split('.').pop()?.toLowerCase()
+    return ext === 'opus' || ext === 'ogg'
+  }
+
   return {
     // State
     enabled,
@@ -263,6 +395,9 @@ export const useLocalPlaybackStore = defineStore('localPlayback', () => {
     disconnect,
     getLocalFile,
     hasLocalFile,
-    getLocalFileUrl
+    getLocalFileUrl,
+    getLocalFileHandle,
+    createOpusStream,
+    isOpusFormat
   }
 })
