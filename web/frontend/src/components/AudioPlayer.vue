@@ -192,7 +192,13 @@ const audioSrc = computed(() => {
     return null  // Don't set via computed - MediaSource sets it directly
   }
 
-  // Use local file if available (buffer-free playback)
+  // If file was loaded with a localUrl (from StudioView local mode), use it directly
+  if (playerStore.currentFile.localUrl) {
+    isLocalPlayback.value = true
+    return playerStore.currentFile.localUrl
+  }
+
+  // Use local file if available (buffer-free playback) - from toggle in player
   if (localBlobUrl.value) {
     return localBlobUrl.value
   }
@@ -398,9 +404,14 @@ function cleanupLocalPlayback() {
 }
 
 // Watch for file changes
-watch(() => playerStore.currentFile, async (newFile) => {
-  // Cleanup previous local playback
+watch(() => playerStore.currentFile, async (newFile, oldFile) => {
+  // Cleanup previous local playback (blob URLs created by AudioPlayer)
   cleanupLocalPlayback()
+
+  // Revoke any localUrl from the previous file (passed from StudioView)
+  if (oldFile?.localUrl) {
+    URL.revokeObjectURL(oldFile.localUrl)
+  }
 
   if (newFile && audioElement.value) {
     // Reset state
@@ -413,7 +424,15 @@ watch(() => playerStore.currentFile, async (newFile) => {
     // Fetch file info to get duration and growing status
     await fetchFileInfo(newFile.path)
 
-    // Check if local playback is preferred, globally enabled, and available
+    // If file was loaded with a localUrl from StudioView, use that directly
+    if (newFile.localUrl) {
+      isLocalPlayback.value = true
+      console.log('Using localUrl from StudioView for:', newFile.path)
+      audioElement.value.load()
+      return
+    }
+
+    // Check if local playback is preferred (via player toggle), globally enabled, and available
     if (preferLocalPlayback.value && captureStore.config.localPlaybackEnabled && localPlaybackStore.isAvailable) {
       const isOpus = localPlaybackStore.isOpusFormat(newFile.path)
 

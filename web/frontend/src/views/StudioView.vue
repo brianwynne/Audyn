@@ -164,16 +164,38 @@
       <!-- Files Panel -->
       <v-col cols="12" md="8">
         <v-card>
-          <v-tabs v-model="activeTab" color="primary">
-            <v-tab value="my-studio">
-              <v-icon start>mdi-folder-star</v-icon>
-              My Studio Files
-            </v-tab>
-            <v-tab value="other-studios">
-              <v-icon start>mdi-folder-multiple</v-icon>
-              Other Studios
-            </v-tab>
-          </v-tabs>
+          <div class="d-flex align-center justify-space-between">
+            <v-tabs v-model="activeTab" color="primary">
+              <v-tab value="my-studio">
+                <v-icon start>mdi-folder-star</v-icon>
+                My Studio Files
+              </v-tab>
+              <v-tab value="other-studios">
+                <v-icon start>mdi-folder-multiple</v-icon>
+                Other Studios
+              </v-tab>
+            </v-tabs>
+
+            <!-- Stream/Local Toggle -->
+            <v-btn-toggle
+              v-if="captureStore.config.localPlaybackEnabled && localPlaybackStore.isAvailable"
+              v-model="playbackMode"
+              mandatory
+              density="compact"
+              color="primary"
+              class="mr-2"
+            >
+              <v-btn value="stream" size="small">
+                <v-icon start size="small">mdi-cloud-download</v-icon>
+                Stream
+              </v-btn>
+              <v-btn value="local" size="small">
+                <v-icon start size="small">mdi-folder-network</v-icon>
+                Local
+                <v-chip size="x-small" color="purple" class="ml-1">Opus</v-chip>
+              </v-btn>
+            </v-btn-toggle>
+          </div>
 
           <v-card-text>
             <v-tabs-window v-model="activeTab">
@@ -183,14 +205,15 @@
                   <v-progress-circular indeterminate color="primary" />
                 </div>
 
-                <div v-else-if="myStudioFiles.length === 0" class="text-center py-8 text-medium-emphasis">
+                <div v-else-if="filteredMyStudioFiles.length === 0" class="text-center py-8 text-medium-emphasis">
                   <v-icon icon="mdi-folder-open" size="48" class="mb-2" />
-                  <p>No audio files found for this studio</p>
+                  <p v-if="playbackMode === 'local'">No Opus/OGG files found for this studio</p>
+                  <p v-else>No audio files found for this studio</p>
                 </div>
 
                 <v-list v-else density="compact" class="file-list">
                   <v-list-item
-                    v-for="file in myStudioFiles"
+                    v-for="file in filteredMyStudioFiles"
                     :key="file.path"
                     class="file-item"
                     :class="{ 'active': playerStore.currentFile?.path === file.path }"
@@ -248,11 +271,11 @@
                     </v-expansion-panel-title>
                     <v-expansion-panel-text>
                       <v-list
-                        v-if="otherStudioFiles[otherStudio.id]?.length"
+                        v-if="filteredOtherStudioFiles[otherStudio.id]?.length"
                         density="compact"
                       >
                         <v-list-item
-                          v-for="file in otherStudioFiles[otherStudio.id]"
+                          v-for="file in filteredOtherStudioFiles[otherStudio.id]"
                           :key="file.path"
                           class="file-item"
                           :class="{ 'active': playerStore.currentFile?.path === file.path }"
@@ -271,7 +294,8 @@
                         </v-list-item>
                       </v-list>
                       <div v-else class="text-center py-4 text-medium-emphasis">
-                        No files available
+                        <span v-if="playbackMode === 'local'">No Opus/OGG files available</span>
+                        <span v-else>No files available</span>
                       </div>
                     </v-expansion-panel-text>
                   </v-expansion-panel>
@@ -295,6 +319,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useStudiosStore } from '@/stores/studios'
 import { useRecordersStore } from '@/stores/recorders'
 import { usePlayerStore } from '@/stores/player'
+import { useLocalPlaybackStore } from '@/stores/localPlayback'
+import { useCaptureStore } from '@/stores/capture'
 import AudioPlayer from '@/components/AudioPlayer.vue'
 
 const route = useRoute()
@@ -303,11 +329,33 @@ const authStore = useAuthStore()
 const studiosStore = useStudiosStore()
 const recordersStore = useRecordersStore()
 const playerStore = usePlayerStore()
+const localPlaybackStore = useLocalPlaybackStore()
+const captureStore = useCaptureStore()
 
 const activeTab = ref('my-studio')
 const loadingFiles = ref(true)
 const myStudioFiles = ref([])
 const otherStudioFiles = ref({})
+const playbackMode = ref('stream')
+
+// Filtered file lists based on playback mode
+const filteredMyStudioFiles = computed(() => {
+  if (playbackMode.value === 'local') {
+    return myStudioFiles.value.filter(f => localPlaybackStore.isOpusFormat(f.name))
+  }
+  return myStudioFiles.value
+})
+
+const filteredOtherStudioFiles = computed(() => {
+  if (playbackMode.value === 'local') {
+    const filtered = {}
+    for (const [studioId, files] of Object.entries(otherStudioFiles.value)) {
+      filtered[studioId] = files.filter(f => localPlaybackStore.isOpusFormat(f.name))
+    }
+    return filtered
+  }
+  return otherStudioFiles.value
+})
 
 // Get current studio
 const studio = computed(() =>
@@ -381,10 +429,21 @@ function formatDate(dateStr) {
 }
 
 function getStudioFileCount(studioId) {
-  return otherStudioFiles.value[studioId]?.length || 0
+  return filteredOtherStudioFiles.value[studioId]?.length || 0
 }
 
-function playFile(file) {
+async function playFile(file) {
+  // If in local mode and file is Opus/OGG, try to get local URL
+  if (playbackMode.value === 'local' && localPlaybackStore.isOpusFormat(file.name)) {
+    const url = await localPlaybackStore.getLocalFileUrl(file.path)
+    if (url) {
+      // Load file with local URL
+      playerStore.loadFile({ ...file, localUrl: url, isLocal: true })
+      playerStore.play()
+      return
+    }
+  }
+  // Fallback to streaming
   playerStore.loadFile(file)
   playerStore.play()
 }
