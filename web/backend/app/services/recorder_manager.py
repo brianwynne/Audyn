@@ -54,11 +54,22 @@ class RecorderProcess:
     levels: list = field(default_factory=list)  # Current audio levels
 
 
+@dataclass
+class MonitorProcess:
+    """Tracks a level monitoring process (runs without recording)."""
+    recorder_id: int
+    process: Optional[asyncio.subprocess.Process] = None
+    config: Optional[RecorderConfig] = None
+    stdout_task: Optional[asyncio.Task] = None
+    levels: list = field(default_factory=list)
+
+
 class RecorderManager:
     """Manages multiple recorder processes."""
 
     def __init__(self):
         self._processes: dict[int, RecorderProcess] = {}
+        self._monitors: dict[int, MonitorProcess] = {}  # Level monitoring processes
         self._lock = asyncio.Lock()
 
     async def initialize(self):
@@ -68,7 +79,9 @@ class RecorderManager:
             logger.warning(f"Audyn binary not found at {AUDYN_BIN}")
 
     async def shutdown(self):
-        """Shutdown all recorders."""
+        """Shutdown all recorders and monitors."""
+        for recorder_id in list(self._monitors.keys()):
+            await self.stop_monitor(recorder_id)
         for recorder_id in list(self._processes.keys()):
             await self.stop_recorder(recorder_id)
         logger.info("RecorderManager shutdown complete")
@@ -363,10 +376,197 @@ class RecorderManager:
         proc.levels = levels
 
     def get_levels(self, recorder_id: int) -> list:
-        """Get current audio levels for a recorder."""
-        if recorder_id not in self._processes:
-            return []
-        return self._processes[recorder_id].levels
+        """Get current audio levels for a recorder (from recording or monitor)."""
+        # Prefer recording process levels if running
+        if recorder_id in self._processes:
+            levels = self._processes[recorder_id].levels
+            if levels:
+                return levels
+        # Fall back to monitor levels
+        if recorder_id in self._monitors:
+            return self._monitors[recorder_id].levels
+        return []
+
+    def _build_monitor_command(self, config: RecorderConfig) -> list[str]:
+        """Build command line for level monitoring (no recording)."""
+        cmd = [AUDYN_BIN]
+
+        # Output to /dev/null - we only want levels
+        cmd.extend(["-o", "/dev/null"])
+
+        # Source configuration
+        if config.source_type == SourceType.PIPEWIRE:
+            cmd.append("--pipewire")
+        else:
+            # AES67
+            if config.multicast_addr:
+                cmd.extend(["-m", config.multicast_addr])
+            cmd.extend(["-p", str(config.port or 5004)])
+            cmd.extend(["--pt", str(config.payload_type or 96)])
+            cmd.extend(["--spp", str(config.samples_per_packet or 48)])
+
+            # AES67 network interface
+            global_cfg = get_global_config()
+            if global_cfg and global_cfg.aes67_interface:
+                cmd.extend(["--interface", global_cfg.aes67_interface])
+
+        # Audio format
+        cmd.extend(["-r", str(config.sample_rate or 48000)])
+        cmd.extend(["-c", str(config.channels or 2)])
+
+        # Enable level metering
+        cmd.append("--levels")
+
+        return cmd
+
+    async def start_monitor(self, recorder_id: int, config: RecorderConfig) -> bool:
+        """Start level monitoring for a recorder (without recording)."""
+        async with self._lock:
+            # Don't start monitor if already recording
+            if recorder_id in self._processes:
+                proc = self._processes[recorder_id]
+                if proc.process and proc.process.returncode is None:
+                    logger.debug(f"Recorder {recorder_id} is recording, skipping monitor")
+                    return False
+
+            # Don't start if monitor already running
+            if recorder_id in self._monitors:
+                mon = self._monitors[recorder_id]
+                if mon.process and mon.process.returncode is None:
+                    return True  # Already running
+
+            cmd = self._build_monitor_command(config)
+            logger.info(f"Starting monitor {recorder_id}: {' '.join(cmd)}")
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+
+                mon_proc = MonitorProcess(
+                    recorder_id=recorder_id,
+                    process=process,
+                    config=config
+                )
+
+                # Start stdout reader for level data
+                mon_proc.stdout_task = asyncio.create_task(
+                    self._read_monitor_levels(recorder_id)
+                )
+
+                self._monitors[recorder_id] = mon_proc
+                logger.info(f"Monitor {recorder_id} started with PID {process.pid}")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to start monitor {recorder_id}: {e}")
+                return False
+
+    async def stop_monitor(self, recorder_id: int) -> bool:
+        """Stop level monitoring for a recorder."""
+        async with self._lock:
+            if recorder_id not in self._monitors:
+                return True
+
+            mon = self._monitors[recorder_id]
+            if not mon.process:
+                del self._monitors[recorder_id]
+                return True
+
+            logger.debug(f"Stopping monitor {recorder_id}...")
+
+            try:
+                if mon.stdout_task:
+                    mon.stdout_task.cancel()
+
+                mon.process.send_signal(signal.SIGTERM)
+
+                try:
+                    await asyncio.wait_for(mon.process.wait(), timeout=2)
+                except asyncio.TimeoutError:
+                    mon.process.kill()
+                    await mon.process.wait()
+
+                del self._monitors[recorder_id]
+                return True
+
+            except Exception as e:
+                logger.error(f"Error stopping monitor {recorder_id}: {e}")
+                return False
+
+    async def _read_monitor_levels(self, recorder_id: int):
+        """Read and parse level JSON from monitor stdout."""
+        if recorder_id not in self._monitors:
+            return
+
+        mon = self._monitors[recorder_id]
+        if not mon.process or not mon.process.stdout:
+            return
+
+        try:
+            while mon.process.returncode is None:
+                try:
+                    line = await asyncio.wait_for(
+                        mon.process.stdout.readline(),
+                        timeout=1.0
+                    )
+                    if line:
+                        line_str = line.decode().strip()
+                        if line_str.startswith('{') and '"type":"levels"' in line_str:
+                            try:
+                                data = json.loads(line_str)
+                                self._update_monitor_levels(recorder_id, data)
+                            except json.JSONDecodeError:
+                                pass
+                except asyncio.TimeoutError:
+                    pass
+
+                await asyncio.sleep(0.01)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Monitor level reader error for recorder {recorder_id}: {e}")
+
+    def _update_monitor_levels(self, recorder_id: int, data: dict):
+        """Update stored levels for a monitor from JSON data."""
+        if recorder_id not in self._monitors:
+            return
+
+        mon = self._monitors[recorder_id]
+        channels = data.get("channels", 2)
+        levels = []
+
+        if "left" in data:
+            left = data["left"]
+            levels.append(ChannelLevel(
+                name="L",
+                level_db=left.get("rms_db", -60),
+                level_linear=10 ** (left.get("rms_db", -60) / 20),
+                peak_db=left.get("peak_db", -60),
+                clipping=left.get("clipping", False)
+            ))
+
+        if "right" in data and channels >= 2:
+            right = data["right"]
+            levels.append(ChannelLevel(
+                name="R",
+                level_db=right.get("rms_db", -60),
+                level_linear=10 ** (right.get("rms_db", -60) / 20),
+                peak_db=right.get("peak_db", -60),
+                clipping=right.get("clipping", False)
+            ))
+
+        mon.levels = levels
+
+    def is_monitoring(self, recorder_id: int) -> bool:
+        """Check if a recorder has active level monitoring."""
+        if recorder_id not in self._monitors:
+            return False
+        mon = self._monitors[recorder_id]
+        return mon.process is not None and mon.process.returncode is None
 
 
 # Singleton instance

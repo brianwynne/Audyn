@@ -212,6 +212,11 @@ async def start_recorder(recorder_id: int, user: User = Depends(get_current_user
 
     # Actually start the recorder process
     manager = get_recorder_manager()
+
+    # Stop any running monitor first (recording takes over level reporting)
+    if manager.is_monitoring(recorder_id):
+        await manager.stop_monitor(recorder_id)
+
     success = await manager.start_recorder(recorder_id, recorder.config, recorder.studio_id)
 
     if not success:
@@ -243,6 +248,9 @@ async def stop_recorder(recorder_id: int, user: User = Depends(get_current_user)
     recorder.state = RecorderState.STOPPED
     recorder.current_file = None
 
+    # Restart level monitor so levels continue to show
+    await manager.start_monitor(recorder_id, recorder.config)
+
     logger.info(f"Recorder {recorder_id} stopped by {user.email}")
 
     return {"message": "Recording stopped", "recorder": recorder}
@@ -258,6 +266,9 @@ async def start_all_recorders(user: User = Depends(get_current_user)):
     for i in range(1, _active_recorder_count + 1):
         recorder = _recorders[i]
         if recorder.enabled and recorder.state == RecorderState.STOPPED:
+            # Stop monitor first
+            if manager.is_monitoring(i):
+                await manager.stop_monitor(i)
             success = await manager.start_recorder(i, recorder.config, recorder.studio_id)
             if success:
                 recorder.state = RecorderState.RECORDING
@@ -280,6 +291,8 @@ async def stop_all_recorders(user: User = Depends(get_current_user)):
             await manager.stop_recorder(recorder.id)
             recorder.state = RecorderState.STOPPED
             recorder.current_file = None
+            # Restart monitor for this recorder
+            await manager.start_monitor(recorder.id, recorder.config)
             stopped.append(recorder.id)
 
     logger.info(f"Stopped recorders {stopped} by {user.email}")

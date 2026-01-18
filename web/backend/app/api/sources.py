@@ -66,9 +66,9 @@ async def detect_pipewire_sources() -> list[PipeWireSource]:
     sources = []
 
     try:
-        # Try pw-cli first (native PipeWire)
+        # Try pw-cli first (native PipeWire) - use "ls Node" instead of "list-objects"
         proc = await asyncio.create_subprocess_exec(
-            "pw-cli", "list-objects",
+            "pw-cli", "ls", "Node",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -100,7 +100,7 @@ async def detect_pipewire_sources() -> list[PipeWireSource]:
                     continue
 
                 # Property lines
-                prop_match = re.match(r'\s*(\S+)\s*=\s*"?([^"]*)"?', line)
+                prop_match = re.match(r'\s+(\S+)\s*=\s*"?([^"]*)"?', line)
                 if prop_match:
                     key = prop_match.group(1).replace('.', '_').replace('-', '_')
                     value = prop_match.group(2).strip('"')

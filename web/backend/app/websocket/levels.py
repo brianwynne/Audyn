@@ -12,8 +12,6 @@ from typing import Optional
 import asyncio
 import json
 import logging
-import random
-import math
 
 from ..api.recorders import get_all_recorders, update_recorder_levels
 from ..models import ChannelLevel, RecorderState
@@ -55,6 +53,17 @@ class ConnectionManager:
             if self._level_task:
                 self._level_task.cancel()
 
+    async def _ensure_monitors_running(self):
+        """Start monitors for all recorders that aren't currently recording."""
+        manager = get_recorder_manager()
+        recorders = get_all_recorders()
+
+        for recorder in recorders:
+            if recorder.state != RecorderState.RECORDING:
+                if not manager.is_monitoring(recorder.id) and not manager.is_running(recorder.id):
+                    logger.info(f"Starting level monitor for recorder {recorder.id}")
+                    await manager.start_monitor(recorder.id, recorder.config)
+
     async def broadcast(self, message: dict):
         """Broadcast message to all connected clients in parallel."""
         if not self.active_connections:
@@ -82,9 +91,10 @@ class ConnectionManager:
 
     async def _broadcast_levels(self):
         """Continuously broadcast audio levels for all recorders."""
-        # Phase offsets for each recorder to simulate different audio sources (fallback)
-        phases = {i: random.random() * 6.28 for i in range(1, 7)}
         manager = get_recorder_manager()
+
+        # Start monitors for all recorders that aren't recording
+        await self._ensure_monitors_running()
 
         while self._running:
             try:
@@ -93,52 +103,17 @@ class ConnectionManager:
 
                 for recorder in recorders:
                     if recorder.state == RecorderState.RECORDING:
-                        # Try to get real levels from recorder manager
+                        # Get real levels from recorder manager
                         real_levels = manager.get_levels(recorder.id)
 
                         if real_levels:
                             # Use real levels from audyn process
                             levels = real_levels
                         else:
-                            # Fallback to simulated levels (for mock or when real not yet available)
-                            phase_l = phases.get(recorder.id, 0)
-                            phase_r = phase_l + 0.3
-
-                            phases[recorder.id] = phase_l + 0.12
-
-                            base_level = -18
-                            variation = 12
-
-                            level_l_db = base_level + (math.sin(phase_l) * variation * 0.5) + \
-                                         (random.random() - 0.5) * 6
-                            level_r_db = base_level + (math.sin(phase_r) * variation * 0.5) + \
-                                         (random.random() - 0.5) * 6
-
-                            # Clamp to realistic range
-                            level_l_db = max(-60, min(0, level_l_db))
-                            level_r_db = max(-60, min(0, level_r_db))
-
-                            # Occasional peaks
-                            if random.random() > 0.95:
-                                level_l_db = min(0, level_l_db + 10)
-                            if random.random() > 0.95:
-                                level_r_db = min(0, level_r_db + 10)
-
+                            # No real levels available - show silence (no fake data)
                             levels = [
-                                ChannelLevel(
-                                    name="L",
-                                    level_db=round(level_l_db, 1),
-                                    level_linear=round(10 ** (level_l_db / 20), 3),
-                                    peak_db=round(level_l_db + 3, 1),
-                                    clipping=level_l_db > -1
-                                ),
-                                ChannelLevel(
-                                    name="R",
-                                    level_db=round(level_r_db, 1),
-                                    level_linear=round(10 ** (level_r_db / 20), 3),
-                                    peak_db=round(level_r_db + 3, 1),
-                                    clipping=level_r_db > -1
-                                )
+                                ChannelLevel(name="L", level_db=-60, level_linear=0, peak_db=-60, clipping=False),
+                                ChannelLevel(name="R", level_db=-60, level_linear=0, peak_db=-60, clipping=False)
                             ]
                     else:
                         # Silence when not recording
