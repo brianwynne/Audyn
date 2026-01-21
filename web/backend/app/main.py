@@ -21,9 +21,11 @@ from .api.stream import router as stream_router
 from .api.recorders import router as recorders_router
 from .api.studios import router as studios_router
 from .api.system import router as system_router
+from .api.discovery import router as discovery_router
 from .websocket.levels import router as ws_router
 from .services.audyn import AudynService
 from .services.recorder_manager import get_recorder_manager
+from .services.sap_discovery import start_sap_service, stop_sap_service
 
 # Configure logging
 logging.basicConfig(
@@ -40,6 +42,7 @@ audyn_service: AudynService = None
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global audyn_service
+    import os
 
     logger.info("Starting Audyn Web Service...")
     audyn_service = AudynService()
@@ -49,9 +52,25 @@ async def lifespan(app: FastAPI):
     recorder_manager = get_recorder_manager()
     await recorder_manager.initialize()
 
+    # Start SAP discovery if enabled
+    sap_enabled = os.getenv("AUDYN_SAP_DISCOVERY", "false").lower() in ("true", "1", "yes")
+    if sap_enabled:
+        try:
+            await start_sap_service()
+            logger.info("SAP discovery auto-started")
+        except Exception as e:
+            logger.warning(f"Failed to start SAP discovery: {e}")
+
     yield
 
     logger.info("Shutting down Audyn Web Service...")
+
+    # Stop SAP discovery
+    try:
+        await stop_sap_service()
+    except Exception:
+        pass
+
     await recorder_manager.shutdown()
     await audyn_service.shutdown()
 
@@ -76,6 +95,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(control_router, prefix="/api/control", tags=["Control"])
 app.include_router(sources_router, prefix="/api/sources", tags=["Sources"])
+app.include_router(discovery_router, prefix="/api/discovery", tags=["Discovery"])
 app.include_router(recorders_router, prefix="/api/recorders", tags=["Recorders"])
 app.include_router(studios_router, prefix="/api/studios", tags=["Studios"])
 app.include_router(assets_router, prefix="/api/assets", tags=["Assets"])

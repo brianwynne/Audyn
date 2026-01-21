@@ -386,19 +386,39 @@ static int handle_packet(audyn_aes_input_t *in, const uint8_t *pkt, size_t len, 
         }
     }
 
-    const uint16_t ch = in->cfg.channels;
+    const uint16_t out_ch = in->cfg.channels;           /* Output channels */
     const uint16_t spp = in->cfg.samples_per_packet;
 
-    if (ch == 0 || spp == 0) {
+    if (out_ch == 0 || spp == 0) {
         in->packets_dropped++;
         return 0;
     }
 
-    /* Infer L16 vs L24 from payload length */
+    /* Stream channels: number of channels in the incoming RTP stream.
+     * If stream_channels is 0, assume same as output channels. */
+    const uint16_t stream_ch = (in->cfg.stream_channels > 0)
+                                 ? in->cfg.stream_channels
+                                 : out_ch;
+    const uint16_t ch_offset = in->cfg.channel_offset;
+
+    /* Validate channel selection */
+    if (ch_offset + out_ch > stream_ch) {
+        /* Channel selection out of range - only log once */
+        static int logged = 0;
+        if (!logged) {
+            LOG_ERROR("aes_input: channel selection out of range: offset=%u + channels=%u > stream_channels=%u",
+                      ch_offset, out_ch, stream_ch);
+            logged = 1;
+        }
+        in->packets_dropped++;
+        return 0;
+    }
+
+    /* Infer L16 vs L24 from payload length using stream_channels */
     enum { FMT_L16 = 16, FMT_L24 = 24 } fmt = 0;
     size_t bytes_per_sample = 0;
-    size_t exp_l16 = (size_t)ch * (size_t)spp * 2U;
-    size_t exp_l24 = (size_t)ch * (size_t)spp * 3U;
+    size_t exp_l16 = (size_t)stream_ch * (size_t)spp * 2U;
+    size_t exp_l24 = (size_t)stream_ch * (size_t)spp * 3U;
 
     if (payload_len == exp_l16) {
         fmt = FMT_L16;
@@ -417,8 +437,8 @@ static int handle_packet(audyn_aes_input_t *in, const uint8_t *pkt, size_t len, 
         return 0;
     }
 
-    /* Validate the frame shape matches config. */
-    if (frame->channels != ch || frame->data == NULL || frame->sample_frames < (uint32_t)spp) {
+    /* Validate the frame shape matches output config. */
+    if (frame->channels != out_ch || frame->data == NULL || frame->sample_frames < (uint32_t)spp) {
         audyn_frame_release(frame);
         set_error(in, "frame_pool returned incompatible frame shape");
         return -1;
@@ -428,19 +448,21 @@ static int handle_packet(audyn_aes_input_t *in, const uint8_t *pkt, size_t len, 
 
     const uint8_t *p = pkt + off;
 
-    /* Payload is interleaved by channel per AES67 PCM conventions. */
+    /* Payload is interleaved by channel per AES67 PCM conventions.
+     * Extract only selected channels from the stream. */
     for (uint32_t i = 0; i < (uint32_t)spp; i++) {
-        for (uint32_t c = 0; c < (uint32_t)ch; c++) {
-            size_t idx = ((size_t)i * (size_t)ch + (size_t)c) * bytes_per_sample;
+        for (uint32_t c = 0; c < (uint32_t)out_ch; c++) {
+            /* Index into the incoming stream at (sample i, channel ch_offset + c) */
+            size_t stream_idx = ((size_t)i * (size_t)stream_ch + (size_t)(ch_offset + c)) * bytes_per_sample;
             float outv;
             if (fmt == FMT_L16) {
-                int16_t s = (int16_t)rd_be16(p + idx);
+                int16_t s = (int16_t)rd_be16(p + stream_idx);
                 outv = s16_to_f32(s);
             } else {
-                int32_t s = rd_be24s(p + idx);
+                int32_t s = rd_be24s(p + stream_idx);
                 outv = s24_to_f32(s);
             }
-            frame->data[AUDYN_PCM_IDX(i, c, ch)] = outv;
+            frame->data[AUDYN_PCM_IDX(i, c, out_ch)] = outv;
         }
     }
 
@@ -571,6 +593,19 @@ audyn_aes_input_create(audyn_frame_pool_t *pool,
                   cfg->channels, AES_MAX_CHANNELS);
         return NULL;
     }
+
+    /* Validate channel selection configuration */
+    uint16_t stream_ch = (cfg->stream_channels > 0) ? cfg->stream_channels : cfg->channels;
+    if (stream_ch > AES_MAX_CHANNELS) {
+        LOG_ERROR("aes_input: invalid stream_channels %u (must be 1-%u)",
+                  cfg->stream_channels, AES_MAX_CHANNELS);
+        return NULL;
+    }
+    if (cfg->channel_offset + cfg->channels > stream_ch) {
+        LOG_ERROR("aes_input: channel selection out of range: offset=%u + channels=%u > stream_channels=%u",
+                  cfg->channel_offset, cfg->channels, stream_ch);
+        return NULL;
+    }
     if (cfg->samples_per_packet == 0 || cfg->samples_per_packet > AES_MAX_SAMPLES_PER_PACKET) {
         LOG_ERROR("aes_input: invalid samples_per_packet %u (must be 1-%u)",
                   cfg->samples_per_packet, AES_MAX_SAMPLES_PER_PACKET);
@@ -636,10 +671,18 @@ audyn_aes_input_create(audyn_frame_pool_t *pool,
     in->last_error[0] = '\0';
     in->have_seq = 0;
 
-    LOG_INFO("aes_input: created (%s:%u PT=%u rate=%u ch=%u spp=%u)",
-             in->source_ip, (unsigned)in->cfg.port, (unsigned)in->cfg.payload_type,
-             (unsigned)in->cfg.sample_rate, (unsigned)in->cfg.channels,
-             (unsigned)in->cfg.samples_per_packet);
+    if (in->cfg.stream_channels > 0 && in->cfg.stream_channels != in->cfg.channels) {
+        LOG_INFO("aes_input: created (%s:%u PT=%u rate=%u ch=%u spp=%u stream_ch=%u offset=%u)",
+                 in->source_ip, (unsigned)in->cfg.port, (unsigned)in->cfg.payload_type,
+                 (unsigned)in->cfg.sample_rate, (unsigned)in->cfg.channels,
+                 (unsigned)in->cfg.samples_per_packet,
+                 (unsigned)in->cfg.stream_channels, (unsigned)in->cfg.channel_offset);
+    } else {
+        LOG_INFO("aes_input: created (%s:%u PT=%u rate=%u ch=%u spp=%u)",
+                 in->source_ip, (unsigned)in->cfg.port, (unsigned)in->cfg.payload_type,
+                 (unsigned)in->cfg.sample_rate, (unsigned)in->cfg.channels,
+                 (unsigned)in->cfg.samples_per_packet);
+    }
 
     return in;
 }

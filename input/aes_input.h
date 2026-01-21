@@ -76,12 +76,17 @@ typedef struct audyn_aes_input_cfg {
     uint8_t     payload_type;
 
     uint32_t    sample_rate;
-    uint16_t    channels;
+    uint16_t    channels;           /* Output channels (1 or 2) */
     uint16_t    samples_per_packet;
 
     uint32_t    socket_rcvbuf;
 
     const char *bind_interface;     /* Network interface for multicast (e.g., "eth0") */
+
+    /* Channel selection for multi-channel streams */
+    uint16_t    stream_channels;    /* Total channels in stream (0 = same as channels) */
+    uint16_t    channel_offset;     /* First channel to extract (0-based, default 0) */
+                                    /* e.g., offset=4, channels=2 extracts channels 5-6 */
 } audyn_aes_input_cfg_t;
 
 typedef struct audyn_aes_input audyn_aes_input_t;

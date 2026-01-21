@@ -412,3 +412,92 @@ async def disable_source(
     _sources[source_id].enabled = False
     _save_sources()  # Persist change
     return {"message": "Source disabled", "source": _sources[source_id]}
+
+
+class SourceFromDiscovery(BaseModel):
+    """Create source from discovered stream."""
+    stream_id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    # Channel selection
+    stream_channels: Optional[int] = None  # 0 = same as output channels
+    channel_offset: int = 0
+    channels: int = 2  # Output channels
+
+
+@router.post("/from-discovery", response_model=AES67Source)
+async def create_source_from_discovery(
+    request: SourceFromDiscovery,
+    user: User = Depends(get_current_user)
+):
+    """
+    Create a new AES67 source from a discovered SAP stream.
+
+    Allows channel selection for multi-channel streams:
+    - stream_channels: Total channels in the stream (optional, auto-detected)
+    - channel_offset: First channel to extract (0-based)
+    - channels: Number of output channels to record
+    """
+    from ..services.sap_discovery import get_sap_service
+
+    sap = get_sap_service()
+    if not sap:
+        raise HTTPException(status_code=503, detail="Discovery service not running")
+
+    # Find the stream
+    streams = await sap.get_streams(active_only=False)
+    stream = None
+    for s in streams:
+        if s.id == request.stream_id:
+            stream = s
+            break
+
+    if not stream:
+        raise HTTPException(status_code=404, detail="Discovered stream not found")
+
+    sdp = stream.sdp
+
+    # Validate channel selection
+    stream_ch = request.stream_channels if request.stream_channels else sdp.channels
+    if request.channel_offset + request.channels > stream_ch:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Channel selection out of range: offset {request.channel_offset} + {request.channels} > {stream_ch}"
+        )
+
+    # Generate source ID and create source
+    source_id = str(uuid.uuid4())[:8]
+    source_name = request.name or sdp.session_name or f"Discovered Stream {source_id}"
+
+    # Build description with channel info
+    desc_parts = []
+    if request.description:
+        desc_parts.append(request.description)
+    else:
+        desc_parts.append(f"Imported from SAP discovery")
+
+    if stream_ch > request.channels or request.channel_offset > 0:
+        # Add channel selection info
+        labels = sdp.channel_labels or [f"Ch {i+1}" for i in range(stream_ch)]
+        selected = labels[request.channel_offset:request.channel_offset + request.channels]
+        desc_parts.append(f"Channels: {', '.join(selected)} (offset {request.channel_offset})")
+
+    new_source = AES67Source(
+        id=source_id,
+        name=source_name,
+        multicast_addr=sdp.multicast_addr,
+        port=sdp.port,
+        sample_rate=sdp.sample_rate,
+        channels=request.channels,
+        payload_type=sdp.payload_type,
+        samples_per_packet=sdp.samples_per_packet,
+        description="; ".join(desc_parts),
+        enabled=True
+    )
+
+    _sources[source_id] = new_source
+    _save_sources()
+
+    logger.info(f"Source created from discovery: {source_id} ({sdp.session_name}) by {user.email}")
+
+    return new_source

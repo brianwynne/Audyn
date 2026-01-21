@@ -29,6 +29,8 @@ SRCS := audyn.c \
         core/archive_policy.c \
         core/level_meter.c \
         core/vox.c \
+        core/sdp_parser.c \
+        core/sap_discovery.c \
         sink/wav_sink.c \
         sink/opus_sink.c \
         input/pipewire_input.c \

@@ -2,10 +2,24 @@
   <v-container fluid class="pa-6">
     <div class="d-flex justify-space-between align-center mb-6">
       <h1 class="text-h4">AES67 Sources</h1>
-      <v-btn color="primary" prepend-icon="mdi-plus" @click="openAddDialog">
-        Add Source
-      </v-btn>
+      <div>
+        <v-btn
+          color="secondary"
+          variant="tonal"
+          prepend-icon="mdi-access-point-network"
+          class="mr-2"
+          @click="showBrowser = true"
+        >
+          Discover Streams
+        </v-btn>
+        <v-btn color="primary" prepend-icon="mdi-plus" @click="openAddDialog">
+          Add Source
+        </v-btn>
+      </div>
     </div>
+
+    <!-- Stream Browser Dialog -->
+    <StreamBrowser v-model="showBrowser" @imported="onStreamImported" />
 
     <v-row>
       <v-col
@@ -168,8 +182,10 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useCaptureStore } from '@/stores/capture'
+import StreamBrowser from '@/components/StreamBrowser.vue'
 
 const captureStore = useCaptureStore()
+const showBrowser = ref(false)
 
 // Dialog state
 const dialog = ref({
@@ -273,6 +289,12 @@ async function confirmDelete() {
 
 async function selectSource(source) {
   await captureStore.switchSource(source.id)
+}
+
+async function onStreamImported(newSource) {
+  // Refresh sources list after importing a stream
+  await captureStore.fetchSources()
+  showBrowser.value = false
 }
 
 onMounted(() => {
