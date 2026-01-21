@@ -10,12 +10,13 @@ Complete reference for the Audyn REST API and WebSocket interfaces.
 4. [Studios API](#studios-api)
 5. [Control API](#control-api)
 6. [Sources API](#sources-api)
-7. [Assets API](#assets-api)
-8. [Stream API](#stream-api)
-9. [System API](#system-api)
-10. [WebSocket API](#websocket-api)
-11. [Data Models](#data-models)
-12. [Error Handling](#error-handling)
+7. [Discovery API](#discovery-api)
+8. [Assets API](#assets-api)
+9. [Stream API](#stream-api)
+10. [System API](#system-api)
+11. [WebSocket API](#websocket-api)
+12. [Data Models](#data-models)
+13. [Error Handling](#error-handling)
 
 ---
 
@@ -537,6 +538,180 @@ Create a new source. **Admin only.**
 ### DELETE /api/sources/{source_id}
 
 Delete a source. **Admin only.**
+
+### POST /api/sources/from-discovery
+
+Create a source from a discovered SAP stream with channel selection.
+
+**Request Body:**
+```json
+{
+  "stream_id": "192.168.1.100:a1b2",
+  "name": "Studio C Desk",
+  "description": "Calrec Type R channels 5-6",
+  "channels": 2,
+  "stream_channels": 16,
+  "channel_offset": 4
+}
+```
+
+**Response:**
+```json
+{
+  "id": "src-abc123",
+  "name": "Studio C Desk",
+  "multicast_addr": "239.69.1.10",
+  "port": 5004,
+  "sample_rate": 48000,
+  "channels": 2,
+  "payload_type": 96,
+  "samples_per_packet": 48,
+  "description": "Imported from SAP discovery; Channels: L, R (offset 4)",
+  "enabled": true
+}
+```
+
+---
+
+## Discovery API
+
+SAP/SDP stream discovery for AES67 networks.
+
+### GET /api/discovery/status
+
+Get discovery service status.
+
+**Response:**
+```json
+{
+  "running": true,
+  "multicast_addr": "239.255.255.255",
+  "packets_received": 1234,
+  "packets_invalid": 5,
+  "announcements": 42,
+  "deletions": 3,
+  "sdp_parse_errors": 1,
+  "active_streams": 8
+}
+```
+
+### POST /api/discovery/start
+
+Start SAP discovery service.
+
+**Request Body (optional):**
+```json
+{
+  "multicast_addr": "239.255.255.255",
+  "bind_interface": "eth1"
+}
+```
+
+**Response:**
+```json
+{
+  "message": "Discovery started",
+  "status": "ok"
+}
+```
+
+### POST /api/discovery/stop
+
+Stop SAP discovery service.
+
+**Response:**
+```json
+{
+  "message": "Discovery stopped",
+  "status": "ok"
+}
+```
+
+### GET /api/discovery/streams
+
+List discovered AES67 streams.
+
+**Query Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `active_only` | boolean | Only return active streams (default: true) |
+
+**Response:**
+```json
+[
+  {
+    "id": "192.168.1.100:a1b2",
+    "session_name": "Calrec Type R Main",
+    "multicast_addr": "239.69.1.10",
+    "port": 5004,
+    "sample_rate": 48000,
+    "channels": 16,
+    "encoding": "L24",
+    "payload_type": 96,
+    "samples_per_packet": 48,
+    "ptime": 1.0,
+    "source_addr": null,
+    "is_ssm": false,
+    "channel_labels": ["L", "R", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15", "Ch 16"],
+    "origin_ip": "192.168.1.100",
+    "first_seen": "2026-01-21T10:30:00Z",
+    "last_seen": "2026-01-21T10:35:00Z",
+    "active": true
+  }
+]
+```
+
+### GET /api/discovery/streams/{stream_id}
+
+Get details for a specific stream.
+
+**Response:** Same as single item in streams list.
+
+### GET /api/discovery/streams/{stream_id}/sdp
+
+Get raw SDP for a discovered stream.
+
+**Response:**
+```json
+{
+  "stream_id": "192.168.1.100:a1b2",
+  "session_name": "Calrec Type R Main",
+  "sdp": "v=0\no=- 12345 12345 IN IP4 192.168.1.100\ns=Calrec Type R Main\nc=IN IP4 239.69.1.10/32\nm=audio 5004 RTP/AVP 96\na=rtpmap:96 L24/48000/16\na=ptime:1\n"
+}
+```
+
+### GET /api/discovery/streams/{stream_id}/channels
+
+Get channel selection info for a stream.
+
+**Query Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `output_channels` | integer | Desired output channels (1-32, default: 2) |
+| `channel_offset` | integer | First channel to extract, 0-based (default: 0) |
+
+**Response:**
+```json
+{
+  "stream_channels": 16,
+  "channel_offset": 4,
+  "output_channels": 2,
+  "channel_labels": ["Ch 5", "Ch 6"]
+}
+```
+
+### GET /api/discovery/search
+
+Search for discovered streams.
+
+**Query Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Search by session name (partial match) |
+| `addr` | string | Filter by multicast address (exact) |
+| `port` | integer | Filter by port |
+
+**Response:** Same as GET /api/discovery/streams.
 
 ---
 

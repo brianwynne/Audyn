@@ -304,6 +304,121 @@ typedef struct audyn_vox_config {
 
 ---
 
+### core/sdp_parser.c / sdp_parser.h
+
+**Location:** `/core/sdp_parser.c`, `/core/sdp_parser.h`
+
+**Purpose:** Parse SDP (Session Description Protocol) payloads for AES67 stream discovery.
+
+**Standards:**
+- RFC 4566 (SDP)
+- AES67-2018 (AES67 SDP extensions)
+- SMPTE ST 2110-30 (Professional media over IP)
+
+**Key Data Structures:**
+```c
+typedef struct {
+    char session_name[128];      // SDP session name (s=)
+    char multicast_addr[64];     // Connection address (c=)
+    uint16_t port;               // Media port (m=)
+    sdp_encoding_t encoding;     // L16, L24, L32, AM824
+    uint32_t sample_rate;        // Clock rate from rtpmap
+    uint16_t channels;           // Channel count
+    float ptime;                 // Packet time (ms)
+    uint16_t samples_per_packet; // Computed from ptime
+    sdp_channel_t channel_info[64]; // Channel labels
+    int has_channel_labels;      // SMPTE 2110 channel-order present
+} sdp_stream_t;
+```
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `sdp_parse()` | Parse SDP text into sdp_stream_t |
+| `sdp_encoding_name()` | Get encoding name string |
+| `sdp_encoding_bits()` | Get bits per sample |
+| `sdp_stream_to_string()` | Format stream info for display |
+
+**Parsed SDP Lines:**
+| Line | Description |
+|------|-------------|
+| `v=` | Version (validated as 0) |
+| `o=` | Origin (session ID, version, address) |
+| `s=` | Session name |
+| `c=` | Connection info (multicast address, TTL) |
+| `m=` | Media description (port, payload type) |
+| `a=rtpmap:` | RTP mapping (encoding, clock, channels) |
+| `a=ptime:` | Packet time in milliseconds |
+| `a=fmtp:` | Format parameters (channel-order) |
+| `a=source-filter:` | Source-specific multicast (SSM) |
+| `a=mediaclk:` | Media clock reference |
+| `a=ts-refclk:` | Timestamp reference clock |
+
+---
+
+### core/sap_discovery.c / sap_discovery.h
+
+**Location:** `/core/sap_discovery.c`, `/core/sap_discovery.h`
+
+**Purpose:** Listen for SAP (Session Announcement Protocol) multicast announcements to discover AES67 streams on the network.
+
+**Standards:**
+- RFC 2974 (SAP)
+- RFC 4566 (SDP payload)
+
+**SAP Multicast Addresses:**
+| Address | Scope |
+|---------|-------|
+| `224.2.127.254` | Global scope |
+| `239.255.255.255` | Admin-local scope (commonly used) |
+
+**Default Port:** 9875
+
+**Key Data Structures:**
+```c
+typedef struct {
+    sdp_stream_t sdp;        // Parsed SDP info
+    uint16_t msg_id_hash;    // SAP message ID
+    char origin_ip[64];      // SAP origin IP
+    time_t first_seen;       // Discovery timestamp
+    time_t last_seen;        // Last announcement
+    int active;              // Stream is active
+    char raw_sdp[4096];      // Raw SDP text
+} sap_stream_entry_t;
+
+typedef enum {
+    SAP_EVENT_NEW,           // New stream discovered
+    SAP_EVENT_UPDATE,        // Stream info updated
+    SAP_EVENT_DELETE,        // Stream deleted/expired
+} sap_event_t;
+```
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `sap_discovery_create()` | Create discovery instance |
+| `sap_discovery_start()` | Start listening thread |
+| `sap_discovery_stop()` | Stop listening |
+| `sap_discovery_destroy()` | Free resources |
+| `sap_discovery_get_streams()` | Get list of discovered streams |
+| `sap_discovery_find_stream()` | Find by multicast address |
+| `sap_discovery_find_by_name()` | Find by session name |
+| `sap_discovery_get_stats()` | Get discovery statistics |
+
+**SAP Header Fields:**
+| Field | Description |
+|-------|-------------|
+| Version | Protocol version (must be 1) |
+| Address Type | IPv4 (0) or IPv6 (1) |
+| Message Type | Announcement (0) or Deletion (1) |
+| Encryption | Encrypted flag (not supported) |
+| Compression | Compressed flag (not supported) |
+| Auth Length | Authentication data length |
+| Msg ID Hash | Message identifier |
+| Origin | Originating source address |
+
+---
+
 ## Input Source Files
 
 ### input/aes_input.c / aes_input.h
@@ -326,11 +441,24 @@ typedef struct audyn_aes_input_cfg {
     uint16_t port;
     uint8_t payload_type;
     uint32_t sample_rate;
-    uint16_t channels;
+    uint16_t channels;           // Output channels (1 or 2)
     uint16_t samples_per_packet;
     uint32_t socket_rcvbuf;
+    const char *bind_interface;
+    // Channel selection for multi-channel streams
+    uint16_t stream_channels;    // Total channels in stream (0 = same as channels)
+    uint16_t channel_offset;     // First channel to extract (0-based)
 } audyn_aes_input_cfg_t;
 ```
+
+**Channel Selection:**
+
+For multi-channel streams (e.g., 16-channel Calrec Type R), set `stream_channels` to the total channels in the stream and `channel_offset` to select which channels to extract.
+
+Example: Extract channels 5-6 from a 16-channel stream:
+- `channels`: 2 (output stereo)
+- `stream_channels`: 16
+- `channel_offset`: 4 (0-based, so channels 5-6)
 
 **Key Functions:**
 | Function | Description |
@@ -556,6 +684,78 @@ typedef struct audyn_opus_cfg {
 
 ---
 
+### web/backend/app/api/sources.py
+
+**Purpose:** REST API for AES67 source configuration.
+
+**Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/sources/` | GET | List all sources |
+| `/api/sources/` | POST | Create source |
+| `/api/sources/active` | GET | Get active source |
+| `/api/sources/active/{id}` | POST | Set active source |
+| `/api/sources/pipewire` | GET | List PipeWire sources |
+| `/api/sources/{id}` | GET | Get specific source |
+| `/api/sources/{id}` | PUT | Update source |
+| `/api/sources/{id}` | DELETE | Delete source |
+| `/api/sources/from-discovery` | POST | Import from SAP discovery |
+
+---
+
+### web/backend/app/api/discovery.py
+
+**Purpose:** REST API for SAP/SDP stream discovery.
+
+**Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/discovery/status` | GET | Get discovery service status |
+| `/api/discovery/start` | POST | Start SAP discovery |
+| `/api/discovery/stop` | POST | Stop SAP discovery |
+| `/api/discovery/streams` | GET | List discovered streams |
+| `/api/discovery/streams/{id}` | GET | Get stream details |
+| `/api/discovery/streams/{id}/sdp` | GET | Get raw SDP |
+| `/api/discovery/streams/{id}/channels` | GET | Get channel selection info |
+| `/api/discovery/search` | GET | Search streams |
+
+---
+
+### web/backend/app/services/sap_discovery.py
+
+**Purpose:** Async SAP discovery service for stream discovery.
+
+**Key Responsibilities:**
+- Listen for SAP multicast announcements (239.255.255.255:9875)
+- Parse SDP payloads for stream information
+- Maintain discovered stream database
+- Handle stream timeouts and deletions
+- Provide async API for querying discovered streams
+
+**Key Classes:**
+| Class | Description |
+|-------|-------------|
+| `SDPStream` | Parsed SDP stream information |
+| `DiscoveredStream` | Stream with discovery metadata |
+| `SAPDiscoveryService` | Main discovery service |
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `parse_sdp()` | Parse SDP text into SDPStream |
+| `start_sap_service()` | Start global discovery service |
+| `stop_sap_service()` | Stop global discovery service |
+| `get_sap_service()` | Get service instance |
+
+**Configuration:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `multicast_addr` | 239.255.255.255 | SAP multicast address |
+| `port` | 9875 | SAP port |
+| `stream_timeout` | 300 | Seconds before stream expires |
+
+---
+
 ### web/backend/app/services/config_store.py
 
 **Purpose:** File-based configuration persistence service.
@@ -768,6 +968,38 @@ typedef struct audyn_opus_cfg {
 - Status chip
 - Compact meters
 - Start/stop buttons
+
+---
+
+### web/frontend/src/components/StreamBrowser.vue
+
+**Purpose:** SAP/SDP stream discovery dialog with channel selection.
+
+**Props:**
+| Prop | Type | Description |
+|------|------|-------------|
+| `modelValue` | Boolean | Dialog visibility (v-model) |
+
+**Events:**
+| Event | Description |
+|-------|-------------|
+| `update:modelValue` | Dialog visibility changed |
+| `imported` | Stream imported as source |
+
+**Features:**
+- Start/stop SAP discovery
+- Auto-refresh stream list every 5 seconds
+- Display discovered streams with format details
+- Multi-channel stream detection
+- Channel selection for multi-channel streams
+- Preview selected channels
+- Import stream as source with channel configuration
+
+**Channel Selection Options:**
+| Option | Description |
+|--------|-------------|
+| Output Channels | Number of channels to record (1-8) |
+| Start at Channel | First channel to extract (0-based offset) |
 
 ---
 

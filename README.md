@@ -7,6 +7,8 @@ Audyn is an enterprise-grade audio capture system designed for broadcast and pro
 ## Key Features
 
 - **AES67/RTP Audio Capture**: Native support for AES67 multicast and unicast streams
+- **SAP/SDP Stream Discovery**: Automatic discovery of AES67 streams via SAP announcements
+- **Channel Selection**: Extract specific channels from multi-channel streams (e.g., channels 5-6 from 16-channel)
 - **PTP Precision Timing**: Hardware and software PTP clock support for accurate timestamping
 - **Multiple Output Formats**: WAV (PCM16) and Opus (Ogg) with configurable quality
 - **Flexible Archive Rotation**: Rotter-compatible file naming with multiple layout options
@@ -172,6 +174,8 @@ AES67 Options:
   -p <port>              UDP port (default: 5004)
   --pt <type>            RTP payload type (default: 96)
   --interface <if>       Bind to specific network interface (e.g., eth1)
+  --stream-channels <n>  Total channels in stream (for channel selection)
+  --channel-offset <n>   First channel to extract, 0-based (default: 0)
 
 PTP Options:
   --ptp-device <path>    Hardware PTP clock device
@@ -206,6 +210,7 @@ Opus Options:
 - **Recorder Management**: Start/stop recorders, configure sources
 - **Studio Configuration**: Create studios, assign recorders
 - **Source Management**: Configure AES67 multicast sources
+- **Stream Discovery**: Discover AES67 streams via SAP with channel selection
 - **File Management**: Browse, play, download, and delete recordings
 - **Network Configuration**: Configure control and AES67 network interfaces (DHCP/Static IP)
 - **System Settings**: Hostname, timezone, NTP servers, SSL certificates

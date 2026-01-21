@@ -52,6 +52,8 @@ This guide covers all configuration options for the Audyn audio capture system, 
 | `--spp <frames>` | Samples per packet | `48` |
 | `--rcvbuf <bytes>` | Socket buffer size | `2097152` |
 | `--interface <if>` | Bind to network interface | All interfaces |
+| `--stream-channels <n>` | Total channels in incoming stream | Same as `-c` |
+| `--channel-offset <n>` | First channel to extract (0-based) | `0` |
 
 ### PTP Options
 
@@ -567,6 +569,7 @@ This allows environment variables to override persisted settings for testing or 
 |----------|-------------|
 | `AUDYN_DEV_MODE` | Enable development mode |
 | `AUDYN_ARCHIVE_ROOT` | Default archive root path |
+| `AUDYN_SAP_DISCOVERY` | Auto-start SAP discovery on startup (true/false) |
 | `ENTRA_TENANT_ID` | Azure AD tenant ID |
 | `ENTRA_CLIENT_ID` | Azure AD application ID |
 | `ENTRA_CLIENT_SECRET` | Azure AD client secret |
@@ -630,6 +633,25 @@ audyn \
   --bitrate 64000 \
   -c 1
 ```
+
+### Multi-Channel Stream (Channel Selection)
+
+Record stereo from a 16-channel Calrec Type R stream, extracting channels 5-6:
+
+```bash
+audyn \
+  --archive-root /var/lib/audyn/studio-c \
+  --archive-layout dailydir \
+  --archive-suffix opus \
+  -m 239.69.1.10 \
+  -p 5004 \
+  -c 2 \
+  --stream-channels 16 \
+  --channel-offset 4 \
+  --bitrate 128000
+```
+
+**Note:** `--channel-offset` is 0-based, so offset 4 extracts channels 5-6.
 
 ### Local Audio Test
 

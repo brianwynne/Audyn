@@ -8,12 +8,13 @@ This guide explains how to use the Audyn web interface for managing audio record
 2. [Overview Dashboard](#overview-dashboard)
 3. [Managing Recorders](#managing-recorders)
 4. [Studio Configuration](#studio-configuration)
-5. [File Browser](#file-browser)
-6. [Audio Playback](#audio-playback)
-7. [Settings](#settings)
-8. [User Roles](#user-roles)
-9. [Keyboard Shortcuts](#keyboard-shortcuts)
-10. [Tips and Best Practices](#tips-and-best-practices)
+5. [Stream Discovery](#stream-discovery)
+6. [File Browser](#file-browser)
+7. [Audio Playback](#audio-playback)
+8. [Settings](#settings)
+9. [User Roles](#user-roles)
+10. [Keyboard Shortcuts](#keyboard-shortcuts)
+11. [Tips and Best Practices](#tips-and-best-practices)
 
 ---
 
@@ -200,6 +201,98 @@ To unassign:
 Colors help identify studios throughout the interface:
 - Recorder cards show the studio color on the left border
 - The Overview shows studio assignment with colored chips
+
+---
+
+## Stream Discovery
+
+*Admin access required*
+
+Stream Discovery allows you to find AES67 audio streams on your network using SAP (Session Announcement Protocol) and import them as sources with channel selection.
+
+### Accessing Stream Discovery
+
+Access via sidebar: **Admin → Sources**, then click **Discover Streams**
+
+### Starting Discovery
+
+1. Click **Discover Streams** on the Sources page
+2. The Stream Browser dialog opens
+3. Click **Start Discovery** to begin listening for SAP announcements
+4. Discovered streams appear in the list automatically
+
+### Discovery Status
+
+The status indicator shows:
+| Indicator | Meaning |
+|-----------|---------|
+| Green "Listening" | Discovery is active and receiving announcements |
+| Red "Stopped" | Discovery is not running |
+
+The stats show:
+- **Active streams**: Number of streams currently discovered
+- **Packets received**: Total SAP packets processed
+
+### Discovered Streams
+
+Each discovered stream displays:
+| Field | Description |
+|-------|-------------|
+| Name | Session name from SDP |
+| Address | Multicast address and port |
+| Format | Encoding type (L24, L16) and sample rate |
+| Channels | Number of channels in the stream |
+
+### Importing a Stream as a Source
+
+1. Find the desired stream in the list
+2. Click **Add as Source**
+3. The import dialog opens
+
+### Channel Selection
+
+For multi-channel streams (more than 2 channels), you can select which channels to record:
+
+| Option | Description |
+|--------|-------------|
+| Output Channels | Number of channels to record (1, 2, etc.) |
+| Start at Channel | First channel to capture (0-based offset) |
+
+**Example:** To record channels 5-6 from a 16-channel stream:
+- Output Channels: 2 (Stereo)
+- Start at Channel: 4 (channels are 0-indexed)
+
+The **Selected Channels** preview shows which channels will be recorded.
+
+### Import Options
+
+| Field | Description |
+|-------|-------------|
+| Source Name | Custom name (defaults to stream session name) |
+| Description | Optional description |
+
+### Completing the Import
+
+1. Configure channel selection (if needed)
+2. Optionally customize the name
+3. Click **Add Source**
+4. The stream is now available as a source
+
+### Stopping Discovery
+
+Click **Stop Discovery** to stop listening for SAP announcements. Discovered streams remain in the list until the dialog is closed.
+
+### Use Cases
+
+**Calrec Type R Networks:**
+- Discover streams published by Calrec Connect
+- Select specific channels from multi-channel audio beds
+- No need to manually enter multicast addresses
+
+**Multi-Studio Recording:**
+- Discover all available studio outputs
+- Import each as a separate source
+- Assign sources to different recorders
 
 ---
 
