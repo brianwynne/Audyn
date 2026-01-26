@@ -222,6 +222,73 @@ Opus Options:
 - **Playback**: Preview recordings in browser
 - **Download**: Export recordings for editing
 
+## Firewall Requirements
+
+Audyn requires the following network access:
+
+### Inbound Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 80 | TCP | HTTP (frontend, redirect to HTTPS) |
+| 443 | TCP | HTTPS (frontend with Nginx) |
+| 8000 | TCP | Backend API (internal, behind Nginx) |
+| 5004 | UDP | AES67 RTP audio (default, configurable via `-p`) |
+
+### Multicast Requirements
+
+| Address | Port | Protocol | Purpose |
+|---------|------|----------|---------|
+| 224.2.127.254 | 9875 | UDP | SAP stream discovery |
+| 239.x.x.x | 5004+ | UDP | AES67 multicast audio streams |
+
+**Note:** Multicast requires IGMP snooping support on network switches. When running in Docker, use `network_mode: host` to receive multicast traffic.
+
+### UFW Examples
+
+```bash
+# Web interface
+sudo ufw allow 80/tcp comment "Audyn HTTP"
+sudo ufw allow 443/tcp comment "Audyn HTTPS"
+
+# Backend API (internal only)
+sudo ufw allow from 127.0.0.1 to any port 8000 proto tcp comment "Audyn API"
+
+# AES67 audio (adjust for your multicast range)
+sudo ufw allow 5004/udp comment "Audyn AES67 RTP"
+
+# SAP discovery (multicast)
+sudo ufw allow 9875/udp comment "Audyn SAP discovery"
+```
+
+### iptables Examples
+
+```bash
+# Web interface
+iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+
+# Backend API (localhost only)
+iptables -A INPUT -p tcp -s 127.0.0.1 --dport 8000 -j ACCEPT
+
+# AES67 RTP audio
+iptables -A INPUT -p udp --dport 5004 -j ACCEPT
+
+# SAP multicast discovery
+iptables -A INPUT -p udp -d 224.2.127.254 --dport 9875 -j ACCEPT
+
+# Allow IGMP for multicast group membership
+iptables -A INPUT -p igmp -j ACCEPT
+```
+
+### Docker Considerations
+
+When running Audyn in Docker with AES67 multicast:
+- Use `network_mode: host` to receive multicast traffic
+- Or configure macvlan/ipvlan networking for container multicast support
+
+---
+
 ## License
 
 Copyright (c) 2026 B. Wynne
