@@ -27,6 +27,13 @@ SAP_ADDR_ADMIN = "239.255.255.255"
 SAP_PORT = 9875
 SAP_VERSION = 1
 
+# SAP Timing (RFC 2974 §4, Calrec Type R compatible)
+# Professional broadcast devices announce every 30 seconds
+# Timeout at 3x interval per RFC 2974 recommendation
+SAP_ANNOUNCE_INTERVAL = 30   # Expected announcement interval (seconds)
+SAP_STREAM_TIMEOUT = 90      # Mark inactive after 3x announce interval
+SAP_CLEANUP_INTERVAL = 15    # Check for expired streams (seconds)
+
 
 # SMPTE ST 2110-30 Channel Grouping Symbols (Table 1)
 SMPTE2110_CHANNEL_GROUPS = {
@@ -329,7 +336,7 @@ class SAPDiscoveryService:
         bind_interface: Optional[str] = None,
         multicast_addr: str = SAP_ADDR_ADMIN,
         port: int = SAP_PORT,
-        stream_timeout: int = 300
+        stream_timeout: int = SAP_STREAM_TIMEOUT
     ):
         self.bind_interface = bind_interface
         self.multicast_addr = multicast_addr
@@ -567,7 +574,7 @@ class SAPDiscoveryService:
     async def _cleanup_loop(self):
         """Periodically clean up expired streams."""
         while self._running:
-            await asyncio.sleep(60)  # Check every minute
+            await asyncio.sleep(SAP_CLEANUP_INTERVAL)
 
             now = datetime.now()
             expired = []

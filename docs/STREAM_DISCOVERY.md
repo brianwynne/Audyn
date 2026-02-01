@@ -151,11 +151,11 @@ web/backend/app/
 │  │      upsert_stream(stream)                                 │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                                                                  │
-│  Cleanup Task                                                    │
+│  Cleanup Task (Calrec Type R compatible timing)                  │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │  every 30 seconds:                                         │   │
+│  │  every 15 seconds:                                         │   │
 │  │    for stream in streams:                                  │   │
-│  │      if now - stream.last_seen > timeout:                  │   │
+│  │      if now - stream.last_seen > 90s:  # 3x 30s interval   │   │
 │  │        mark_inactive(stream)                               │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                                                                  │
@@ -617,8 +617,9 @@ iptables -A INPUT -p igmp -j ACCEPT
    - AES67 devices should announce every 30-300 seconds
    - Check device SAP configuration
 
-2. **Cleanup timeout too short:**
-   - Default timeout is 5 minutes
+2. **Cleanup timeout:**
+   - Default timeout is 90 seconds (3x 30-second announce interval)
+   - Matches Calrec Type R and RFC 2974 recommendations
    - Streams are marked inactive if no announcement received
 
 ### WSL2 Multicast Issues
