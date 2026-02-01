@@ -36,6 +36,7 @@ class AES67Source(BaseModel):
     samples_per_packet: int = 48
     description: Optional[str] = None
     enabled: bool = True
+    discovered_name: Optional[str] = None  # Original name from SAP/SDP discovery
 
 
 class SourceCreate(BaseModel):
@@ -492,7 +493,8 @@ async def create_source_from_discovery(
         payload_type=sdp.payload_type,
         samples_per_packet=sdp.samples_per_packet,
         description="; ".join(desc_parts),
-        enabled=True
+        enabled=True,
+        discovered_name=sdp.session_name if sdp.session_name else None
     )
 
     _sources[source_id] = new_source

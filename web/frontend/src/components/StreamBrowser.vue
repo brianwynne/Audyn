@@ -136,12 +136,28 @@
     <v-card>
       <v-card-title>Add Stream as Source</v-card-title>
       <v-card-text>
+        <!-- Network Discovered Name -->
+        <v-alert
+          type="info"
+          variant="tonal"
+          density="compact"
+          class="mb-4"
+        >
+          <div class="d-flex align-center">
+            <v-icon icon="mdi-access-point-network" class="mr-2" />
+            <div>
+              <div class="text-caption text-medium-emphasis">Network Discovered Name</div>
+              <div class="font-weight-medium">{{ importDialog.stream?.session_name }}</div>
+            </div>
+          </div>
+        </v-alert>
+
         <v-form ref="importForm" v-model="importDialog.valid">
           <v-text-field
             v-model="importDialog.name"
-            label="Source Name"
+            label="Display Name"
             :placeholder="importDialog.stream?.session_name"
-            hint="Leave blank to use stream name"
+            hint="Custom name for this source (network name is preserved)"
             persistent-hint
           />
 

@@ -63,6 +63,14 @@
                 </template>
                 <v-list-item-title>{{ source.sample_rate }} Hz / {{ source.channels }} ch</v-list-item-title>
               </v-list-item>
+              <v-list-item v-if="source.discovered_name">
+                <template v-slot:prepend>
+                  <v-icon icon="mdi-access-point-network" size="small" />
+                </template>
+                <v-list-item-title class="text-caption text-medium-emphasis">
+                  Network: {{ source.discovered_name }}
+                </v-list-item-title>
+              </v-list-item>
               <v-list-item v-if="source.description">
                 <template v-slot:prepend>
                   <v-icon icon="mdi-information" size="small" />

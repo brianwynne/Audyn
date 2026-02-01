@@ -28,9 +28,10 @@ router = APIRouter()
 
 
 class StreamInfo(BaseModel):
-    """Discovered stream information for API response."""
+    """Discovered stream information for API response (SMPTE ST 2110-30 compliant)."""
     id: str
     session_name: str
+    session_info: Optional[str] = None
     multicast_addr: str
     port: int
     sample_rate: int
@@ -42,10 +43,17 @@ class StreamInfo(BaseModel):
     source_addr: Optional[str] = None
     is_ssm: bool = False
     channel_labels: list[str] = []
+    channel_order_raw: Optional[str] = None  # e.g. "SMPTE2110.(51,ST)"
     origin_ip: str
     first_seen: str
     last_seen: str
     active: bool
+    # SMPTE ST 2110-30 specific fields
+    ptp_grandmaster: Optional[str] = None  # PTP GM ID from ts-refclk
+    ptp_domain: int = 0  # PTP domain
+    mediaclk: Optional[str] = None  # Raw mediaclk value
+    is_st2110_compliant: bool = False  # True if mediaclk:direct=0
+    conformance_level: Optional[str] = None  # A, B, C, AX, BX, CX
 
 
 class DiscoveryStatus(BaseModel):
@@ -79,6 +87,7 @@ def _stream_to_info(stream: DiscoveredStream) -> StreamInfo:
     return StreamInfo(
         id=stream.id,
         session_name=stream.sdp.session_name or "(unnamed)",
+        session_info=stream.sdp.session_info or None,
         multicast_addr=stream.sdp.multicast_addr,
         port=stream.sdp.port,
         sample_rate=stream.sdp.sample_rate,
@@ -90,10 +99,17 @@ def _stream_to_info(stream: DiscoveredStream) -> StreamInfo:
         source_addr=stream.sdp.source_addr,
         is_ssm=stream.sdp.is_ssm,
         channel_labels=stream.sdp.channel_labels or [f"Ch {i+1}" for i in range(stream.sdp.channels)],
+        channel_order_raw=stream.sdp.channel_order_raw or None,
         origin_ip=stream.origin_ip,
         first_seen=stream.first_seen.isoformat(),
         last_seen=stream.last_seen.isoformat(),
-        active=stream.active
+        active=stream.active,
+        # SMPTE ST 2110-30 fields
+        ptp_grandmaster=stream.sdp.ptp_grandmaster or None,
+        ptp_domain=stream.sdp.ptp_domain,
+        mediaclk=stream.sdp.mediaclk or None,
+        is_st2110_compliant=stream.sdp.is_st2110_compliant,
+        conformance_level=stream.sdp.conformance_level or None
     )
 
 

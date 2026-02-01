@@ -28,12 +28,29 @@ SAP_PORT = 9875
 SAP_VERSION = 1
 
 
+# SMPTE ST 2110-30 Channel Grouping Symbols (Table 1)
+SMPTE2110_CHANNEL_GROUPS = {
+    "M": ["M"],                                          # Mono
+    "DM": ["M1", "M2"],                                  # Dual Mono
+    "ST": ["L", "R"],                                    # Stereo
+    "LtRt": ["Lt", "Rt"],                                # Matrix Stereo
+    "51": ["L", "R", "C", "LFE", "Ls", "Rs"],           # 5.1 Surround
+    "71": ["L", "R", "C", "LFE", "Lss", "Rss", "Lrs", "Rrs"],  # 7.1 Surround (DS)
+    "222": ["L", "R", "C", "LFE", "Lss", "Rss", "Lrs", "Rrs",  # 22.2
+            "Tfl", "Tfr", "Tfc", "Tsl", "Tsr", "Tbl", "Tbr",
+            "Tbc", "Ltf", "Rtf", "Ltr", "Rtr", "Lw", "Rw", "LFE2", "Cb"],
+    "SGRP": ["St1L", "St1R", "St2L", "St2R"],           # Standard Stereo Group (SDI)
+}
+
+
 @dataclass
 class SDPStream:
-    """Parsed SDP stream information."""
+    """Parsed SDP stream information per SMPTE ST 2110-30."""
     session_name: str = ""
     session_id: str = ""
+    session_version: str = ""
     origin_addr: str = ""
+    session_info: str = ""  # i= line
     multicast_addr: str = ""
     port: int = 0
     payload_type: int = 96
@@ -45,8 +62,14 @@ class SDPStream:
     source_addr: Optional[str] = None  # For SSM
     is_ssm: bool = False
     channel_labels: list[str] = field(default_factory=list)
+    channel_order_raw: str = ""  # Raw channel-order string e.g. "SMPTE2110.(51,ST)"
     mediaclk: str = ""
+    mediaclk_offset: int = 0  # Should be 0 for ST 2110
     ts_refclk: str = ""
+    ptp_grandmaster: str = ""  # PTP GM ID from ts-refclk
+    ptp_domain: int = 0  # PTP domain from ts-refclk
+    is_st2110_compliant: bool = False  # True if mediaclk:direct=0
+    conformance_level: str = ""  # A, B, C, AX, BX, CX
     raw_sdp: str = ""
 
 
@@ -61,12 +84,138 @@ class DiscoveredStream:
     active: bool = True
 
 
+def parse_channel_order(channel_order_str: str) -> list[str]:
+    """
+    Parse SMPTE2110 channel-order into channel labels.
+
+    Format: SMPTE2110.(symbol1,symbol2,...)
+    Example: SMPTE2110.(51,ST) -> ['L','R','C','LFE','Ls','Rs','L','R']
+    """
+    labels = []
+
+    # Extract symbols from parentheses
+    match = re.search(r'\(([^)]+)\)', channel_order_str)
+    if not match:
+        return labels
+
+    symbols = match.group(1).split(',')
+
+    for symbol in symbols:
+        symbol = symbol.strip()
+
+        # Check for undefined groups U01-U64
+        if re.match(r'^U(\d+)$', symbol):
+            count = int(symbol[1:])
+            for i in range(count):
+                labels.append(f"U{len(labels)+1}")
+        # Check known SMPTE2110 symbols
+        elif symbol in SMPTE2110_CHANNEL_GROUPS:
+            labels.extend(SMPTE2110_CHANNEL_GROUPS[symbol])
+        # Unknown symbol - add as-is
+        elif symbol:
+            labels.append(symbol)
+
+    return labels
+
+
+def parse_ts_refclk(ts_refclk: str) -> tuple[str, int]:
+    """
+    Parse ts-refclk to extract PTP grandmaster ID and domain.
+
+    Format: ptp=IEEE1588-2008:GM-ID:domain
+    Example: ptp=IEEE1588-2008:00-11-22-FF-FE-33-44-55:0
+
+    Returns: (grandmaster_id, domain)
+    """
+    grandmaster = ""
+    domain = 0
+
+    match = re.search(r'ptp=IEEE1588-\d+:([0-9A-Fa-f-]+):(\d+)', ts_refclk)
+    if match:
+        grandmaster = match.group(1).upper()
+        domain = int(match.group(2))
+
+    return grandmaster, domain
+
+
+def parse_mediaclk(mediaclk: str) -> tuple[bool, int]:
+    """
+    Parse mediaclk to check ST 2110 compliance.
+
+    ST 2110 requires: mediaclk:direct=0
+
+    Returns: (is_st2110_compliant, offset)
+    """
+    is_compliant = False
+    offset = -1
+
+    if mediaclk.startswith('direct='):
+        try:
+            # Extract offset value
+            match = re.match(r'direct=(\d+)', mediaclk)
+            if match:
+                offset = int(match.group(1))
+                is_compliant = (offset == 0)
+        except ValueError:
+            pass
+
+    return is_compliant, offset
+
+
+def detect_conformance_level(channels: int, ptime: float, sample_rate: int) -> str:
+    """
+    Detect SMPTE ST 2110-30 conformance level.
+
+    Level A: 1-8 ch, 1ms ptime, 48kHz (also AES67)
+    Level B: 1-8 ch, 0.125ms ptime, 48kHz
+    Level C: 1-64 ch, 0.125ms ptime, 48kHz
+    Level AX: 1-4 ch, 1ms ptime, 96kHz
+    Level BX: 1-4 ch, 0.125ms ptime, 96kHz
+    Level CX: 1-32 ch, 0.125ms ptime, 96kHz
+    """
+    is_96k = sample_rate == 96000
+    is_1ms = abs(ptime - 1.0) < 0.01
+    is_125us = abs(ptime - 0.125) < 0.01
+
+    if is_96k:
+        if is_1ms and channels <= 4:
+            return "AX"
+        elif is_125us:
+            if channels <= 4:
+                return "BX"
+            elif channels <= 32:
+                return "CX"
+    else:  # 48kHz (or 44.1kHz)
+        if is_1ms and channels <= 8:
+            return "A"
+        elif is_125us:
+            if channels <= 8:
+                return "B"
+            elif channels <= 64:
+                return "C"
+
+    return ""  # Non-conformant
+
+
 def parse_sdp(sdp_text: str) -> Optional[SDPStream]:
-    """Parse SDP text into SDPStream structure."""
+    """
+    Parse SDP text into SDPStream structure.
+
+    Compliant with:
+    - RFC 8866 (SDP: Session Description Protocol)
+    - SMPTE ST 2110-30 (PCM Digital Audio)
+    - SMPTE ST 2110-10 (System Timing and Definitions)
+
+    RFC 8866 compliance:
+    - Accepts both CRLF and LF line endings
+    - Parses mandatory fields: v=, o=, s=, c=, t=, m=
+    - Parses optional fields: i=, a=
+    """
     stream = SDPStream(raw_sdp=sdp_text)
     in_audio_media = False
 
-    for line in sdp_text.split('\n'):
+    # RFC 8866: Accept both CRLF and LF line endings
+    for line in sdp_text.replace('\r\n', '\n').split('\n'):
         line = line.strip()
         if len(line) < 2 or line[1] != '=':
             continue
@@ -79,10 +228,14 @@ def parse_sdp(sdp_text: str) -> Optional[SDPStream]:
             parts = value.split()
             if len(parts) >= 6:
                 stream.session_id = parts[1]
+                stream.session_version = parts[2]
                 stream.origin_addr = parts[5]
 
         elif type_char == 's':
             stream.session_name = value
+
+        elif type_char == 'i':
+            stream.session_info = value
 
         elif type_char == 'c':
             # c=<nettype> <addrtype> <connection-address>[/<ttl>][/<num>]
@@ -126,23 +279,18 @@ def parse_sdp(sdp_text: str) -> Optional[SDPStream]:
 
             elif value.startswith('mediaclk:'):
                 stream.mediaclk = value[9:]
+                stream.is_st2110_compliant, stream.mediaclk_offset = parse_mediaclk(stream.mediaclk)
 
             elif value.startswith('ts-refclk:'):
                 stream.ts_refclk = value[10:]
+                stream.ptp_grandmaster, stream.ptp_domain = parse_ts_refclk(stream.ts_refclk)
 
             elif value.startswith('fmtp:'):
-                # Look for channel-order
-                match = re.search(r'channel-order=\S+\.\(([^)]+)\)', value)
+                # Look for channel-order=SMPTE2110.(...)
+                match = re.search(r'channel-order=(\S+\.\([^)]+\))', value)
                 if match:
-                    labels = []
-                    for token in match.group(1).split(','):
-                        if token == 'ST':
-                            labels.extend(['L', 'R'])
-                        elif token == 'M':
-                            labels.append(f'Ch {len(labels)+1}')
-                        else:
-                            labels.append(token)
-                    stream.channel_labels = labels
+                    stream.channel_order_raw = match.group(1)
+                    stream.channel_labels = parse_channel_order(stream.channel_order_raw)
 
     # Validate we got minimum info
     if stream.multicast_addr and stream.port > 0:
@@ -153,6 +301,21 @@ def parse_sdp(sdp_text: str) -> Optional[SDPStream]:
             stream.channels = 2
         if stream.samples_per_packet == 0:
             stream.samples_per_packet = 48
+
+        # Generate default channel labels if not provided
+        if not stream.channel_labels:
+            if stream.channels == 1:
+                stream.channel_labels = ["M"]
+            elif stream.channels == 2:
+                stream.channel_labels = ["L", "R"]
+            else:
+                stream.channel_labels = [f"Ch {i+1}" for i in range(stream.channels)]
+
+        # Detect conformance level
+        stream.conformance_level = detect_conformance_level(
+            stream.channels, stream.ptime, stream.sample_rate
+        )
+
         return stream
 
     return None
@@ -201,6 +364,7 @@ class SAPDiscoveryService:
             # Create UDP socket
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             self._socket.setblocking(False)
 
             # Bind to SAP port
@@ -252,19 +416,36 @@ class SAPDiscoveryService:
         logger.info("SAP discovery stopped")
 
     async def _listener_loop(self):
-        """Main listener loop."""
-        loop = asyncio.get_event_loop()
+        """Main listener loop using add_reader for reliable multicast."""
+        loop = asyncio.get_running_loop()
+        data_queue = asyncio.Queue()
 
-        while self._running:
+        def on_readable():
             try:
-                data, addr = await loop.sock_recvfrom(self._socket, 65535)
-                self.packets_received += 1
-                await self._handle_packet(data, addr[0])
-            except asyncio.CancelledError:
-                break
+                data, addr = self._socket.recvfrom(65535)
+                loop.call_soon_threadsafe(data_queue.put_nowait, (data, addr))
+            except BlockingIOError:
+                pass
             except Exception as e:
-                logger.error(f"SAP listener error: {e}")
-                await asyncio.sleep(0.1)
+                logger.error(f"SAP socket read error: {e}")
+
+        loop.add_reader(self._socket.fileno(), on_readable)
+        logger.info("SAP listener loop started")
+
+        try:
+            while self._running:
+                try:
+                    data, addr = await asyncio.wait_for(data_queue.get(), timeout=1.0)
+                    self.packets_received += 1
+                    await self._handle_packet(data, addr[0])
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"SAP listener error: {e}")
+        finally:
+            loop.remove_reader(self._socket.fileno())
 
     async def _handle_packet(self, data: bytes, origin_ip: str):
         """Handle a SAP packet."""
